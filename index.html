@@ -131,6 +131,13 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
 <div class="wrap">
   <section class="step">
     <div class="step-h"><div class="step-n">1</div><h2>Cargar documentos</h2></div>
+    <div class="dz auto" id="dz-auto" style="border-color:var(--red);margin-bottom:20px">
+      <div class="dz-label"><span class="dot" style="background:var(--red)"></span>Documento combinado — factura + packing juntos <span style="font-weight:600;text-transform:none;font-size:12px;color:var(--ink2)">(yo separo las páginas)</span></div>
+      <small>Si tu PDF trae la factura y el packing list en el mismo archivo (y hasta otros documentos), súbelo aquí. Clasifico cada página sola.</small>
+      <div><label class="dz-btn">Elegir archivos<input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style="display:none" id="in-auto"></label></div>
+      <ul class="files" id="files-auto"></ul>
+    </div>
+    <div style="text-align:center;font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);letter-spacing:.1em;margin-bottom:16px">— O SUBE CADA UNO POR SEPARADO —</div>
     <div class="drops">
       <div class="dz inv" id="dz-inv">
         <div class="dz-label"><span class="dot b"></span>Facturas / Invoices</div>
@@ -194,8 +201,9 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
 
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-const store={inv:[],pak:[]};
-const map={inv:{},pak:{}};      // mapping (indices) for the representative grid of each side
+const ZONES=['auto','inv','pak'];
+const store={inv:[],pak:[],auto:[]};
+const map={inv:{},pak:{}};
 let results=[], activeFilter='all', ocrWorker=null;
 
 /* ---------- helpers ---------- */
@@ -205,30 +213,32 @@ const normCode=v=>String(v==null?'':v).trim().toUpperCase().replace(/[\s.]+$/,''
 const fmtN=n=>(Math.round(n*100)/100).toLocaleString('en-US',{maximumFractionDigits:2});
 const isCodeTok=t=>{t=String(t).trim();return t.length>=3&&t.length<=18&&/[A-Za-z]/.test(t)&&/\d/.test(t)&&!/^\d+[.,]\d+$/.test(t);};
 
-/* ---------- token -> rows reconstruction (per page) ---------- */
+/* ---------- page-type classification ---------- */
+const INV_KW=[/invoice/,/unit\s*price/,/\bamount\b/,/factura/,/precio/,/total\s*amount/];
+const PAK_KW=[/packing/,/net\s*weight/,/gross\s*weight/,/\bweight\b/,/carton/,/\bbox\b/,/bulto/,/\bpeso\b/,/package/,/\bpkg\b/,/n\.?w\.?\b/,/g\.?w\.?\b/];
+function classifyGrid(rows){
+  const txt=rows.slice(0,30).map(r=>r.join(' ')).join(' ').toLowerCase();
+  const iv=INV_KW.reduce((a,re)=>a+(re.test(txt)?1:0),0);
+  const pk=PAK_KW.reduce((a,re)=>a+(re.test(txt)?1:0),0);
+  if(iv>pk)return'inv';if(pk>iv)return'pak';return null; // null -> inherit
+}
+
+/* ---------- token -> rows (per page) ---------- */
 function tokensToRows(tokens){
-  if(!tokens.length) return [];
+  if(!tokens.length)return[];
   const hs=tokens.map(t=>t.h).filter(h=>h>0).sort((a,b)=>a-b);
-  const mh=hs.length?hs[Math.floor(hs.length/2)]:10;
-  const tol=Math.max(mh*0.6,3);
+  const mh=hs.length?hs[Math.floor(hs.length/2)]:10,tol=Math.max(mh*0.6,3);
   tokens.sort((a,b)=>a.y-b.y||a.x-b.x);
   const lines=[];let cur=[],ref=null;
-  for(const t of tokens){
-    if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}
-    else{lines.push(cur);cur=[t];ref=t.y;}
-  }
+  for(const t of tokens){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
   if(cur.length)lines.push(cur);
   lines.forEach(l=>l.sort((a,b)=>a.x-b.x));
   let dl=lines.filter(l=>l.length>=3&&l.some(t=>isCodeTok(t.t)));
-  if(dl.length<2)dl=lines.filter(l=>l.length>=3);
-  if(dl.length<1)dl=lines;
-  const minX=Math.min(...tokens.map(t=>t.x));
-  const maxX=Math.max(...tokens.map(t=>t.x+t.w));
-  const W=Math.ceil(maxX-minX)+2;
+  if(dl.length<2)dl=lines.filter(l=>l.length>=3);if(dl.length<1)dl=lines;
+  const minX=Math.min(...tokens.map(t=>t.x)),maxX=Math.max(...tokens.map(t=>t.x+t.w)),W=Math.ceil(maxX-minX)+2;
   const cov=new Float32Array(W);
   dl.forEach(l=>l.forEach(t=>{const a=Math.floor(t.x-minX),b=Math.ceil(t.x+t.w-minX);for(let x=a;x<b&&x<W;x++)if(x>=0)cov[x]++;}));
-  const thr=Math.max(1,dl.length*0.10),gmin=Math.max(mh*0.5,4);
-  const bounds=[];let s=null;
+  const thr=Math.max(1,dl.length*0.10),gmin=Math.max(mh*0.5,4),bounds=[];let s=null;
   for(let x=0;x<W;x++){if(cov[x]<=thr){if(s===null)s=x;}else{if(s!==null&&x-s>=gmin)bounds.push(minX+(s+x)/2);s=null;}}
   const colOf=xc=>{let c=0;for(const b of bounds)if(xc>=b)c++;return c;};
   const ncol=bounds.length+1;
@@ -237,45 +247,37 @@ function tokensToRows(tokens){
   return grid.map(r=>keep.map(c=>r[c]));
 }
 
-/* ---------- parsing : returns {grids:[2D arrays], src} ---------- */
+/* ---------- parsing : returns {pages:[{rows}], src} ---------- */
 async function parseFile(file,onp){return ext(file.name)==='pdf'?parsePDF(file,onp):parseSheet(file);}
 async function parseSheet(file){
-  const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});
-  const grids=[];
-  wb.SheetNames.forEach(sn=>{const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false,defval:''});if(a.length)grids.push(a.map(r=>r.map(c=>c==null?'':c)));});
-  return {grids,src:'sheet'};
+  const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});const pages=[];
+  wb.SheetNames.forEach(sn=>{const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false,defval:''});if(a.length)pages.push({rows:a.map(r=>r.map(c=>c==null?'':c))});});
+  return {pages,src:'sheet'};
 }
 async function getOCRWorker(){if(ocrWorker)return ocrWorker;ocrWorker=await Tesseract.createWorker('eng',1,{logger:m=>{if(window._ocrCb)window._ocrCb(m);}});return ocrWorker;}
 async function parsePDF(file,onp){
-  const buf=await file.arrayBuffer();
-  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-  // try embedded text layer (per page -> one grid per page)
-  const pageTokens=[];let textCount=0;
+  const buf=await file.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const pageToks=[];let textCount=0;
   for(let p=1;p<=pdf.numPages;p++){
-    const page=await pdf.getPage(p);const tc=await page.getTextContent();
-    const vh=page.getViewport({scale:1}).height;const toks=[];
-    tc.items.forEach(it=>{const s=it.str;if(!s||!s.trim())return;const fs=Math.abs(it.transform[3])||Math.abs(it.height)||10;toks.push({x:it.transform[4],y:vh-it.transform[5],w:it.width||(s.length*fs*0.5),h:fs,t:s});textCount++;});
-    pageTokens.push(toks);
+    const page=await pdf.getPage(p);const tc=await page.getTextContent();const vh=page.getViewport({scale:1}).height;const toks=[];
+    tc.items.forEach(it=>{const sgt=it.str;if(!sgt||!sgt.trim())return;const fs=Math.abs(it.transform[3])||Math.abs(it.height)||10;toks.push({x:it.transform[4],y:vh-it.transform[5],w:it.width||(sgt.length*fs*0.5),h:fs,t:sgt});textCount++;});
+    pageToks.push(toks);
   }
-  if(textCount>=12) return {grids:pageTokens.map(t=>tokensToRows(t)).filter(g=>g.length),src:'texto'};
-  // OCR fallback (one grid per page)
-  if(typeof Tesseract==='undefined')return {grids:[],src:'error'};
-  const worker=await getOCRWorker();
-  const canvas=document.getElementById('rcanvas'),ctx=canvas.getContext('2d');
-  const grids=[];
+  if(textCount>=12)return{pages:pageToks.map(t=>({rows:tokensToRows(t)})).filter(p=>p.rows.length),src:'texto'};
+  if(typeof Tesseract==='undefined')return{pages:[],src:'error'};
+  const worker=await getOCRWorker();const canvas=document.getElementById('rcanvas'),ctx=canvas.getContext('2d');const pages=[];
   for(let p=1;p<=pdf.numPages;p++){
-    const page=await pdf.getPage(p);const vp=page.getViewport({scale:2.4});
-    canvas.width=vp.width;canvas.height=vp.height;
+    const page=await pdf.getPage(p);const vp=page.getViewport({scale:2.4});canvas.width=vp.width;canvas.height=vp.height;
     await page.render({canvasContext:ctx,viewport:vp}).promise;
     window._ocrCb=m=>{if(m.status==='recognizing text')onp&&onp(`OCR pág ${p}/${pdf.numPages} · ${Math.round(m.progress*100)}%`);};
     const {data}=await worker.recognize(canvas);window._ocrCb=null;
     const toks=[];(data.words||[]).forEach(w=>{const t=(w.text||'').trim();if(!t)return;const b=w.bbox;toks.push({x:b.x0,y:b.y0,w:b.x1-b.x0,h:b.y1-b.y0,t});});
-    const g=tokensToRows(toks);if(g.length)grids.push(g);
+    const rows=tokensToRows(toks);if(rows.length)pages.push({rows});
   }
-  return {grids,src:'OCR'};
+  return {pages,src:'OCR'};
 }
 
-/* ---------- header & content-based auto-map ---------- */
+/* ---------- header & auto-map ---------- */
 const HKW=/(quantity|descrip|^no\.?$|cust|item|uom|unit|price|amount|cant|qty|c[oó]digo|part|peso|weight|box|caja)/i;
 function detectHeader(rows){
   let best=0,bestS=-1;
@@ -285,18 +287,11 @@ function detectHeader(rows){
   return best;
 }
 function autoMap(rows,hdrIdx){
-  const header=rows[hdrIdx]||[];
-  const data=rows.slice(hdrIdx+1).filter(r=>r.some(c=>String(c).trim()!==''));
+  const header=rows[hdrIdx]||[];const data=rows.slice(hdrIdx+1).filter(r=>r.some(c=>String(c).trim()!==''));
   const ncol=header.length,m={code:-1,qty:-1,desc:-1,price:-1},sc=[];
   for(let c=0;c<ncol;c++){
     const vals=data.map(r=>String(r[c]==null?'':r[c]).trim()).filter(v=>v!=='');const n=vals.length||1;
-    sc.push({
-      code:vals.filter(v=>isCodeTok(v)).length/n,
-      dec:vals.filter(v=>/^\(?-?[\d.,]+\)?$/.test(v)&&/[.,]\d/.test(v)).length/n,
-      intg:vals.filter(v=>/^\d{1,5}$/.test(v)).length/n,
-      txt:vals.filter(v=>/[A-Za-z]/.test(v)&&!isCodeTok(v)).length/n,
-      head:String(header[c]||'').toLowerCase()
-    });
+    sc.push({code:vals.filter(v=>isCodeTok(v)).length/n,dec:vals.filter(v=>/^\(?-?[\d.,]+\)?$/.test(v)&&/[.,]\d/.test(v)).length/n,intg:vals.filter(v=>/^\d{1,5}$/.test(v)).length/n,txt:vals.filter(v=>/[A-Za-z]/.test(v)&&!isCodeTok(v)).length/n,head:String(header[c]||'').toLowerCase()});
   }
   let bi=-1,bv=0.35;sc.forEach((s,c)=>{let v=s.code+(/(part|fm|c[oó]digo|^no)/.test(s.head)?0.3:0)-(/(cust|item)/.test(s.head)?0.15:0);if(v>bv){bv=v;bi=c;}});m.code=bi;
   bi=-1;bv=0.3;sc.forEach((s,c)=>{if(c===m.code)return;let v=s.intg+(/(cant|qty|quantity)/.test(s.head)?0.4:0)-(/(price|precio|amount|weight|peso)/.test(s.head)?0.3:0);if(v>bv){bv=v;bi=c;}});m.qty=bi;
@@ -304,14 +299,27 @@ function autoMap(rows,hdrIdx){
   bi=-1;bv=0.4;sc.forEach((s,c)=>{if(c===m.code||c===m.qty)return;let v=s.txt+(/(desc)/.test(s.head)?0.4:0);if(v>bv){bv=v;bi=c;}});m.desc=bi;
   return m;
 }
-const dataRowCount=g=>g.filter(r=>r.length>=3&&r.some(c=>isCodeTok(c))).length;
-function repGrid(f){return f.grids[f.repIdx];}
+const dataRowCount=rows=>rows.filter(r=>r.length>=3&&r.some(c=>isCodeTok(c))).length;
+
+/* ---------- side pools (collect graded pages from all zones) ---------- */
+function sidePages(side){
+  const out=[];
+  store[side].forEach(f=>{if(f.ok)f.pages.forEach(p=>out.push(p.rows));});
+  store.auto.forEach(f=>{if(f.ok)f.pages.forEach(p=>{if(p.kind===side)out.push(p.rows);});});
+  return out;
+}
+function sideRep(side){
+  const pages=sidePages(side);let bi=0,bv=-1;
+  pages.forEach((g,i)=>{const d=dataRowCount(g);if(d>bv){bv=d;bi=i;}});
+  return pages.length?{grid:pages[bi],hi:detectHeader(pages[bi])}:null;
+}
 
 /* ---------- files UI ---------- */
 function fileStatus(f){
   if(f.state==='busy')return['busy',f.msg||'leyendo…'];
   if(f.state==='err'||!f.ok)return['err',f.state==='err'?'no se pudo leer':'sin tabla'];
-  const rows=f.grids.reduce((a,g)=>a+Math.max(0,dataRowCount(g)),0);
+  if(f.zone==='auto'){const ni=f.pages.filter(p=>p.kind==='inv').length,np=f.pages.filter(p=>p.kind==='pak').length;return['ok',`✓ ${ni} pág factura · ${np} pág packing`];}
+  const rows=f.pages.reduce((a,p)=>a+dataRowCount(p.rows),0);
   return['ok',`✓ ${rows} líneas · ${f.src}`];
 }
 function renderFiles(side){
@@ -320,35 +328,40 @@ function renderFiles(side){
     li.innerHTML=`<span class="ftag ${f.ok||f.state==='busy'?'':'err'}">${ext(f.name)}</span><span class="fn" title="${f.name}">${f.name}</span><span class="st ${st[0]}">${st[1]}</span><button class="rm" data-side="${side}" data-i="${i}">✕</button>`;
     ul.appendChild(li);});
 }
-async function handleFiles(side,fileList){
+function classifyAutoPages(f){
+  let last='inv';
+  f.pages.forEach(p=>{let k=classifyGrid(p.rows);if(!k)k=last;p.kind=k;last=k;});
+}
+async function handleFiles(zone,fileList){
   for(const file of Array.from(fileList)){
-    const rec={name:file.name,grids:[],ok:false,state:'busy',msg:'leyendo…',src:'',repIdx:0,headerIdx:0};
-    store[side].push(rec);renderFiles(side);
+    const rec={name:file.name,zone,pages:[],ok:false,state:'busy',msg:'leyendo…',src:''};
+    store[zone].push(rec);renderFiles(zone);
     try{
-      const out=await parseFile(file,msg=>{rec.msg=msg;renderFiles(side);});
-      rec.grids=out.grids||[];rec.src=out.src;rec.ok=rec.grids.length>0;rec.state=rec.ok?'ok':'err';
-      if(rec.ok){let bi=0,bv=-1;rec.grids.forEach((g,i)=>{const d=dataRowCount(g);if(d>bv){bv=d;bi=i;}});rec.repIdx=bi;rec.headerIdx=detectHeader(rec.grids[bi]);}
+      const out=await parseFile(file,msg=>{rec.msg=msg;renderFiles(zone);});
+      rec.pages=out.pages||[];rec.src=out.src;rec.ok=rec.pages.length>0;rec.state=rec.ok?'ok':'err';
+      if(rec.ok){
+        if(zone==='auto')classifyAutoPages(rec);
+        else rec.pages.forEach(p=>p.kind=zone);
+      }
     }catch(e){console.error(e);rec.state='err';rec.ok=false;}
-    renderFiles(side);buildMapping();
+    renderFiles(zone);buildMapping();
   }
 }
 
 /* ---------- mapping UI ---------- */
-const firstOk=side=>store[side].find(f=>f.ok);
 function buildMapping(){
-  const hi=store.inv.some(f=>f.ok),hp=store.pak.some(f=>f.ok);
+  const hi=sidePages('inv').length>0,hp=sidePages('pak').length>0;
   document.getElementById('map-step').classList.toggle('hidden',!(hi||hp));
   buildMapCard('inv','Facturas / Invoices');buildMapCard('pak','Packing Lists');
   document.getElementById('run').disabled=!(hi&&hp);
 }
 function buildMapCard(side,title){
-  const f=firstOk(side),card=document.getElementById('mapcard-'+side);
-  if(!f){card.innerHTML=`<h3>${title}</h3><p style="color:var(--ink2);font-size:13px">Aún no hay archivos válidos.</p>`;return;}
-  const g=repGrid(f);const auto=autoMap(g,f.headerIdx);map[side]={...auto};
-  const header=g[f.headerIdx]||[];
+  const rep=sideRep(side),card=document.getElementById('mapcard-'+side);
+  if(!rep){card.innerHTML=`<h3>${title}</h3><p style="color:var(--ink2);font-size:13px">Aún no hay páginas de este tipo.</p>`;return;}
+  const g=rep.grid,hidx=rep.hi;const auto=autoMap(g,hidx);map[side]={...auto,_hi:hidx};
+  const header=g[hidx]||[];
   const opt=(sel,none)=>{let h=none?`<option value="-1" ${sel<0?'selected':''}>— (ninguna) —</option>`:'';return h+header.map((x,i)=>`<option value="${i}" ${sel==i?'selected':''}>Col ${i+1}: ${String(x).slice(0,26)||'—'}</option>`).join('');};
-  card.innerHTML=`<h3>${title} <span style="font-size:11px;color:var(--ink2);font-weight:600">(${f.src})</span></h3>
-    <div class="field"><label>Fila de encabezado</label><select data-side="${side}" data-k="header">${g.slice(0,25).map((r,i)=>`<option value="${i}" ${i==f.headerIdx?'selected':''}>Fila ${i+1}: ${r.filter(x=>String(x).trim()).slice(0,3).join(' | ').slice(0,42)}</option>`).join('')}</select></div>
+  card.innerHTML=`<h3>${title}</h3>
     <div class="field"><label>Código <span class="req">*</span></label><select data-side="${side}" data-k="code">${opt(auto.code,false)}</select></div>
     <div class="field"><label>Cantidad <span class="req">*</span></label><select data-side="${side}" data-k="qty">${opt(auto.qty,false)}</select></div>
     <div class="field"><label>Descripción</label><select data-side="${side}" data-k="desc">${opt(auto.desc,true)}</select></div>
@@ -357,57 +370,44 @@ function buildMapCard(side,title){
   renderPreview(side);
 }
 function renderPreview(side){
-  const f=firstOk(side);if(!f)return;const g=repGrid(f);
-  document.getElementById('prev-'+side).innerHTML='<table>'+g.slice(0,9).map((r,ri)=>'<tr class="'+(ri==f.headerIdx?'hdr':'')+'">'+r.map(c=>`<td>${String(c).slice(0,18)}</td>`).join('')+'</tr>').join('')+'</table>';
+  const rep=sideRep(side);if(!rep)return;const g=rep.grid;
+  document.getElementById('prev-'+side).innerHTML='<table>'+g.slice(0,9).map((r,ri)=>'<tr class="'+(ri==rep.hi?'hdr':'')+'">'+r.map(c=>`<td>${String(c).slice(0,18)}</td>`).join('')+'</tr>').join('')+'</table>';
 }
 
-/* ---------- comparison (per-grid mapping + strict row filter) ---------- */
+/* ---------- comparison ---------- */
 function gridMapping(side,g){
-  const f=firstOk(side),rep=repGrid(f);
-  const repCols=(rep[f.headerIdx]||[]).length,cols=(g[detectHeader(g)]||[]).length;
-  if(cols===repCols) return {m:map[side],hi:detectHeader(g)};   // same layout -> use UI mapping
-  const hi=detectHeader(g);return {m:autoMap(g,hi),hi};         // different layout -> auto-map this grid
+  const rep=sideRep(side);const repCols=(rep.grid[rep.hi]||[]).length;const hi=detectHeader(g),cols=(g[hi]||[]).length;
+  if(cols===repCols)return{m:map[side],hi};
+  return{m:autoMap(g,hi),hi};
 }
 function aggregateGrid(agg,g,m,hi){
   const ncol=(g[hi]||[]).length,minfill=Math.max(4,Math.floor(ncol*0.5));
   for(let i=hi+1;i<g.length;i++){
     const r=g[i];if(!r)continue;
     if(m.code<0||m.qty<0||m.code>=r.length||m.qty>=r.length)continue;
-    if(r.filter(c=>String(c).trim()!=='').length<minfill)continue;   // skip stray/marks lines
-    if(!isCodeTok(r[m.code]))continue;                               // code cell must look like a code
-    const code=normCode(r[m.code]),qty=parseNum(r[m.qty]);
-    if(!code||isNaN(qty))continue;
+    if(r.filter(c=>String(c).trim()!=='').length<minfill)continue;
+    if(!isCodeTok(r[m.code]))continue;
+    const code=normCode(r[m.code]),qty=parseNum(r[m.qty]);if(!code||isNaN(qty))continue;
     if(!agg[code])agg[code]={qty:0,count:0,desc:'',price:NaN,orig:String(r[m.code]).trim()};
     agg[code].qty+=qty;agg[code].count++;
     if(m.desc>=0&&m.desc<r.length&&!agg[code].desc)agg[code].desc=String(r[m.desc]||'').trim();
     if(m.price>=0&&m.price<r.length&&isNaN(agg[code].price)){const p=parseNum(r[m.price]);if(!isNaN(p))agg[code].price=p;}
   }
 }
-function aggregate(side){
-  const agg={};
-  store[side].forEach(f=>{if(!f.ok)return;f.grids.forEach(g=>{const {m,hi}=gridMapping(side,g);aggregateGrid(agg,g,m,hi);});});
-  return agg;
-}
+function aggregate(side){const agg={};sidePages(side).forEach(g=>{const{m,hi}=gridMapping(side,g);aggregateGrid(agg,g,m,hi);});return agg;}
 function compare(){
-  const ai=aggregate('inv'),ap=aggregate('pak');
-  const codes=new Set([...Object.keys(ai),...Object.keys(ap)]);results=[];
+  const ai=aggregate('inv'),ap=aggregate('pak');const codes=new Set([...Object.keys(ai),...Object.keys(ap)]);results=[];
   codes.forEach(code=>{
-    const I=ai[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
-    const P=ap[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
-    let st;
-    if(I.count>0&&P.count>0)st=Math.abs(I.qty-P.qty)<1e-6?'igual':'diferente';
-    else if(I.count>0)st='no_embarcado';else st='no_facturado';
+    const I=ai[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};const P=ap[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
+    let st;if(I.count>0&&P.count>0)st=Math.abs(I.qty-P.qty)<1e-6?'igual':'diferente';else if(I.count>0)st='no_embarcado';else st='no_facturado';
     results.push({code:I.orig||P.orig||code,desc:I.desc||P.desc||'',ci:I.count,cp:P.count,qi:I.qty,qp:P.qty,dif:P.qty-I.qty,status:st,rep:(I.count>1||P.count>1),price:!isNaN(I.price)?I.price:P.price,amount:isNaN(I.price)?NaN:I.qty*I.price});
   });
   results.sort((a,b)=>a.code.localeCompare(b.code,undefined,{numeric:true}));
-  renderResults();
-  document.getElementById('results-step').classList.remove('hidden');
-  document.getElementById('results-step').scrollIntoView();
+  renderResults();document.getElementById('results-step').classList.remove('hidden');document.getElementById('results-step').scrollIntoView();
 }
 const STATUS={igual:['Igual','b-ig'],diferente:['Diferente','b-di'],no_embarcado:['No embarcado','b-ne'],no_facturado:['No facturado','b-nf']};
 function renderResults(){
-  const c={igual:0,diferente:0,no_embarcado:0,no_facturado:0,rep:0};
-  results.forEach(r=>{c[r.status]++;if(r.rep)c.rep++;});
+  const c={igual:0,diferente:0,no_embarcado:0,no_facturado:0,rep:0};results.forEach(r=>{c[r.status]++;if(r.rep)c.rep++;});
   document.getElementById('cards').innerHTML=`
     <div class="card"><div class="v">${results.length}</div><div class="l">Códigos</div></div>
     <div class="card ig"><div class="v">${c.igual}</div><div class="l">Iguales</div></div>
@@ -415,8 +415,7 @@ function renderResults(){
     <div class="card ne"><div class="v">${c.no_embarcado}</div><div class="l">No embarcado</div></div>
     <div class="card nf"><div class="v">${c.no_facturado}</div><div class="l">No facturado</div></div>
     <div class="card rp"><div class="v">${c.rep}</div><div class="l">Repetidos</div></div>`;
-  const q=(document.getElementById('search').value||'').toUpperCase();
-  const body=document.getElementById('res-body');body.innerHTML='';
+  const q=(document.getElementById('search').value||'').toUpperCase();const body=document.getElementById('res-body');body.innerHTML='';
   const rows=results.filter(r=>{if(activeFilter==='rep'&&!r.rep)return false;if(activeFilter!=='all'&&activeFilter!=='rep'&&r.status!==activeFilter)return false;if(q&&!(r.code.toUpperCase().includes(q)||String(r.desc).toUpperCase().includes(q)))return false;return true;});
   if(!rows.length){body.innerHTML='<tr><td colspan="10" class="empty">Sin resultados para este filtro.</td></tr>';return;}
   rows.forEach(r=>{const st=STATUS[r.status];const tr=document.createElement('tr');if(r.rep)tr.className='rep';
@@ -433,20 +432,20 @@ document.getElementById('exp-prt').onclick=()=>window.print();
 /* ---------- events ---------- */
 const showOv=t=>{document.getElementById('ov-txt').textContent=t;document.getElementById('overlay').classList.add('on');};
 const hideOv=()=>document.getElementById('overlay').classList.remove('on');
-['inv','pak'].forEach(side=>{
-  const inp=document.getElementById('in-'+side),dz=document.getElementById('dz-'+side);
-  inp.onchange=e=>{handleFiles(side,e.target.files);inp.value='';};
+ZONES.forEach(zone=>{
+  const inp=document.getElementById('in-'+zone),dz=document.getElementById('dz-'+zone);
+  inp.onchange=e=>{handleFiles(zone,e.target.files);inp.value='';};
   ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('over');}));
   ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('over');}));
-  dz.addEventListener('drop',e=>handleFiles(side,e.dataTransfer.files));
+  dz.addEventListener('drop',e=>handleFiles(zone,e.dataTransfer.files));
 });
 document.addEventListener('click',e=>{
   if(e.target.classList.contains('rm')){store[e.target.dataset.side].splice(+e.target.dataset.i,1);renderFiles(e.target.dataset.side);buildMapping();}
   if(e.target.classList.contains('chip')){document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));e.target.classList.add('on');activeFilter=e.target.dataset.f;renderResults();}
 });
-document.addEventListener('change',e=>{const d=e.target.dataset;if(!d||!d.k)return;if(d.k==='header'){firstOk(d.side).headerIdx=+e.target.value;buildMapCard(d.side,d.side==='inv'?'Facturas / Invoices':'Packing Lists');}else map[d.side][d.k]=+e.target.value;});
+document.addEventListener('change',e=>{const d=e.target.dataset;if(!d||!d.k)return;map[d.side][d.k]=+e.target.value;});
 document.getElementById('search').addEventListener('input',renderResults);
-document.getElementById('run').onclick=()=>{if(map.inv.code<0||map.inv.qty<0||map.pak.code<0||map.pak.qty<0){alert('Asigna al menos el Código y la Cantidad en ambos lados.');return;}showOv('Comparando…');setTimeout(()=>{compare();hideOv();},60);};
+document.getElementById('run').onclick=()=>{if(map.inv.code<0||map.inv.qty<0||map.pak.code<0||map.pak.qty<0){alert('No pude identificar el código o la cantidad en algún lado. Revisa el paso 2.');return;}showOv('Comparando…');setTimeout(()=>{compare();hideOv();},60);};
 window.addEventListener('beforeunload',()=>{if(ocrWorker)ocrWorker.terminate();});
 
 </script>
