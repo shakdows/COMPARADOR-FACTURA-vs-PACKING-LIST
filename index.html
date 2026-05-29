@@ -167,17 +167,8 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
       </div>
     </div>
   </section>
-  <section class="step hidden" id="map-step">
-    <div class="step-h"><div class="step-n">2</div><h2>Asignar columnas</h2></div>
-    <p class="sub" style="margin-bottom:16px">Se detectan automáticamente. Revisa que el <b>código</b> y la <b>cantidad</b> estén bien; ajústalos si hace falta. La asignación se aplica a todos los archivos del mismo lado.</p>
-    <div class="map-grid">
-      <div class="map-card inv" id="mapcard-inv"></div>
-      <div class="map-card pak" id="mapcard-pak"></div>
-    </div>
-    <div class="run"><button id="run" disabled>Comparar ▸</button></div>
-  </section>
   <section class="step hidden" id="results-step">
-    <div class="step-h"><div class="step-n">3</div><h2>Resultado del cotejo</h2></div>
+    <div class="step-h"><div class="step-n">2</div><h2>Resultado del cotejo</h2></div>
     <div class="cards" id="cards"></div>
     <div id="recon"></div>
     <div class="toolbar">
@@ -205,6 +196,15 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
     <div class="note">
       <b>Cómo se agrupa y se decide:</b> los códigos se agrupan por <b>código + precio</b>: si un código se repite <b>al mismo precio</b> se suman las cantidades; si aparece con <b>precio distinto</b>, cada precio se muestra en su propia sub-línea (↳) para no mezclar. <b>Igual</b> = la cantidad total de factura y packing coincide; <b>Diferente</b> = ambos lo tienen pero la cantidad no cuadra; <b>No embarcado</b> = en la factura pero no en el packing; <b>No facturado</b> = en el packing pero no en la factura. El panel de <b>Cuadre</b> suma el importe por estado para verificar el monto facturado y te señala dónde están las diferencias. Si leíste un PDF escaneado por OCR, revisa los códigos (puede confundir O/0 o I/1).
     </div>
+    <details class="adv" id="map-step">
+      <summary style="cursor:pointer;font-family:'JetBrains Mono';font-size:12px;color:var(--ink2);margin-top:14px">⚙ ¿Algún código mal leído? Ajustar columnas detectadas (avanzado)</summary>
+      <p class="sub" style="margin:10px 0 12px">Normalmente no necesitas tocar esto. Solo si el cuadro detectó mal la columna de código o cantidad.</p>
+      <div class="map-grid">
+        <div class="map-card inv" id="mapcard-inv"></div>
+        <div class="map-card pak" id="mapcard-pak"></div>
+      </div>
+      <button id="run" style="display:none"></button>
+    </details>
   </section>
   <footer>
     Herramienta 100% local — tus archivos se procesan en tu navegador, nada se sube a ningún servidor. El OCR descarga su modelo desde un CDN la primera vez.<br>
@@ -224,30 +224,30 @@ let results=[], activeFilter='all', ocrWorker=null;
 /* ---------- helpers ---------- */
 const ext=n=>n.split('.').pop().toLowerCase();
 function parseNum(v){if(typeof v==='number')return v;if(v==null)return NaN;let s=String(v).trim().replace(/[^\d.,\-]/g,'');if(s===''||s==='-')return NaN;const lc=s.lastIndexOf(','),ld=s.lastIndexOf('.');if(lc>ld)s=s.replace(/\./g,'').replace(',','.');else s=s.replace(/,/g,'');const n=parseFloat(s);return isNaN(n)?NaN:n;}
-const normCode=v=>String(v==null?'':v).trim().toUpperCase().replace(/[\s.]+$/,'').replace(/\s+/g,'');
+const normCode=v=>String(v==null?'':v).trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+const ocrKey=c=>normCode(c).replace(/O/g,'0').replace(/I/g,'1').replace(/L/g,'1').replace(/Z/g,'2').replace(/S/g,'5').replace(/B/g,'8').replace(/G/g,'6').replace(/Q/g,'0');
+function fuzzyMatch(x,y){const nx=normCode(x),ny=normCode(y);if(nx===ny)return true;if(ocrKey(x)===ocrKey(y))return true;const a=nx,b=ny,s=a.length<=b.length?a:b,l=a.length<=b.length?b:a;return s.length>=5&&l.startsWith(s)&&l.length-s.length<=8;}
 const fmtN=n=>(Math.round(n*100)/100).toLocaleString('en-US',{maximumFractionDigits:2});
 const isCodeTok=t=>{t=String(t).trim();return t.length>=3&&t.length<=18&&/[A-Za-z]/.test(t)&&/\d/.test(t)&&!/^\d+[.,]\d+$/.test(t);};
 
 /* ---------- page-type classification ---------- */
 const INV_KW=[/invoice/,/unit\s*price/,/\bamount\b/,/factura/,/precio/,/total\s*amount/];
 const PAK_KW=[/packing/,/net\s*weight/,/gross\s*weight/,/\bweight\b/,/carton/,/\bbox\b/,/bulto/,/\bpeso\b/,/package/,/\bpkg\b/,/n\.?w\.?\b/,/g\.?w\.?\b/];
-function classifyGrid(rows){
-  const txt=rows.slice(0,30).map(r=>r.join(' ')).join(' ').toLowerCase();
+function classifyText(txt){
+  txt=String(txt||'').toLowerCase();
   const iv=INV_KW.reduce((a,re)=>a+(re.test(txt)?1:0),0);
   const pk=PAK_KW.reduce((a,re)=>a+(re.test(txt)?1:0),0);
   if(iv>pk)return'inv';if(pk>iv)return'pak';return null; // null -> inherit
 }
 
 /* ---------- token -> rows (per page) ---------- */
-function tokensToRows(tokens){
-  if(!tokens.length)return[];
+function computeBounds(tokens){
   const hs=tokens.map(t=>t.h).filter(h=>h>0).sort((a,b)=>a-b);
   const mh=hs.length?hs[Math.floor(hs.length/2)]:10,tol=Math.max(mh*0.6,3);
-  tokens.sort((a,b)=>a.y-b.y||a.x-b.x);
+  const sorted=tokens.slice().sort((a,b)=>a.y-b.y||a.x-b.x);
   const lines=[];let cur=[],ref=null;
-  for(const t of tokens){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
+  for(const t of sorted){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
   if(cur.length)lines.push(cur);
-  lines.forEach(l=>l.sort((a,b)=>a.x-b.x));
   let dl=lines.filter(l=>l.length>=3&&l.some(t=>isCodeTok(t.t)));
   if(dl.length<2)dl=lines.filter(l=>l.length>=3);if(dl.length<1)dl=lines;
   const minX=Math.min(...tokens.map(t=>t.x)),maxX=Math.max(...tokens.map(t=>t.x+t.w)),W=Math.ceil(maxX-minX)+2;
@@ -255,18 +255,36 @@ function tokensToRows(tokens){
   dl.forEach(l=>l.forEach(t=>{const a=Math.floor(t.x-minX),b=Math.ceil(t.x+t.w-minX);for(let x=a;x<b&&x<W;x++)if(x>=0)cov[x]++;}));
   const thr=Math.max(1,dl.length*0.10),gmin=Math.max(mh*0.5,4),bounds=[];let s=null;
   for(let x=0;x<W;x++){if(cov[x]<=thr){if(s===null)s=x;}else{if(s!==null&&x-s>=gmin)bounds.push(minX+(s+x)/2);s=null;}}
+  return {bounds,tol};
+}
+function rowsFromTokens(tokens,bounds,tol){
+  if(!tokens.length)return[];
+  const sorted=tokens.slice().sort((a,b)=>a.y-b.y||a.x-b.x);
+  const lines=[];let cur=[],ref=null;
+  for(const t of sorted){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
+  if(cur.length)lines.push(cur);
   const colOf=xc=>{let c=0;for(const b of bounds)if(xc>=b)c++;return c;};
   const ncol=bounds.length+1;
-  let grid=lines.map(l=>{const row=new Array(ncol).fill('');l.forEach(t=>{const ci=colOf(t.x+t.w/2);row[ci]=(row[ci]?row[ci]+' ':'')+String(t.t).trim();});return row;});
-  const keep=[];for(let c=0;c<ncol;c++)if(grid.some(r=>String(r[c]).trim()!==''))keep.push(c);
-  return grid.map(r=>keep.map(c=>r[c]));
+  return lines.map(l=>{const row=new Array(ncol).fill('');l.sort((a,b)=>a.x-b.x).forEach(t=>{const ci=colOf(t.x+t.w/2);row[ci]=(row[ci]?row[ci]+' ':'')+String(t.t).trim();});return row;});
+}
+const codeDensity=tokens=>tokens.filter(t=>isCodeTok(t.t)).length;
+function fileGrids(pageToks){
+  const nonEmpty=pageToks.filter(t=>t.length);
+  if(!nonEmpty.length)return[];
+  let best=nonEmpty[0];nonEmpty.forEach(t=>{if(codeDensity(t)>codeDensity(best))best=t;});
+  const {bounds,tol}=computeBounds(best);                 // shared columns from densest page
+  return pageToks.map(toks=>{
+    if(!toks.length)return null;
+    const rows=rowsFromTokens(toks,bounds,tol);
+    return {rows,text:toks.map(t=>t.t).join(' ')};
+  }).filter(Boolean);
 }
 
-/* ---------- parsing : returns {pages:[{rows}], src} ---------- */
+/* ---------- parsing : returns {pages:[{rows,text}], src} ---------- */
 async function parseFile(file,onp){return ext(file.name)==='pdf'?parsePDF(file,onp):parseSheet(file);}
 async function parseSheet(file){
   const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});const pages=[];
-  wb.SheetNames.forEach(sn=>{const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false,defval:''});if(a.length)pages.push({rows:a.map(r=>r.map(c=>c==null?'':c))});});
+  wb.SheetNames.forEach(sn=>{const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false,defval:''});if(a.length){const rows=a.map(r=>r.map(c=>c==null?'':c));pages.push({rows,text:rows.map(r=>r.join(' ')).join(' ')});}});
   return {pages,src:'sheet'};
 }
 async function getOCRWorker(){if(ocrWorker)return ocrWorker;ocrWorker=await Tesseract.createWorker('eng',1,{logger:m=>{if(window._ocrCb)window._ocrCb(m);}});return ocrWorker;}
@@ -278,18 +296,18 @@ async function parsePDF(file,onp){
     tc.items.forEach(it=>{const sgt=it.str;if(!sgt||!sgt.trim())return;const fs=Math.abs(it.transform[3])||Math.abs(it.height)||10;toks.push({x:it.transform[4],y:vh-it.transform[5],w:it.width||(sgt.length*fs*0.5),h:fs,t:sgt});textCount++;});
     pageToks.push(toks);
   }
-  if(textCount>=12)return{pages:pageToks.map(t=>({rows:tokensToRows(t)})).filter(p=>p.rows.length),src:'texto'};
+  if(textCount>=12)return{pages:fileGrids(pageToks),src:'texto'};
   if(typeof Tesseract==='undefined')return{pages:[],src:'error'};
-  const worker=await getOCRWorker();const canvas=document.getElementById('rcanvas'),ctx=canvas.getContext('2d');const pages=[];
+  const worker=await getOCRWorker();const canvas=document.getElementById('rcanvas'),ctx=canvas.getContext('2d');const ptoks=[];
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p);const vp=page.getViewport({scale:2.4});canvas.width=vp.width;canvas.height=vp.height;
     await page.render({canvasContext:ctx,viewport:vp}).promise;
     window._ocrCb=m=>{if(m.status==='recognizing text')onp&&onp(`OCR pág ${p}/${pdf.numPages} · ${Math.round(m.progress*100)}%`);};
     const {data}=await worker.recognize(canvas);window._ocrCb=null;
     const toks=[];(data.words||[]).forEach(w=>{const t=(w.text||'').trim();if(!t)return;const b=w.bbox;toks.push({x:b.x0,y:b.y0,w:b.x1-b.x0,h:b.y1-b.y0,t});});
-    const rows=tokensToRows(toks);if(rows.length)pages.push({rows});
+    ptoks.push(toks);
   }
-  return {pages,src:'OCR'};
+  return {pages:fileGrids(ptoks),src:'OCR'};
 }
 
 /* ---------- header & auto-map ---------- */
@@ -345,7 +363,7 @@ function renderFiles(side){
 }
 function classifyAutoPages(f){
   let last='inv';
-  f.pages.forEach(p=>{let k=classifyGrid(p.rows);if(!k)k=last;p.kind=k;last=k;});
+  f.pages.forEach(p=>{let k=classifyText(p.text);if(!k)k=last;p.kind=k;last=k;});
 }
 async function handleFiles(zone,fileList){
   for(const file of Array.from(fileList)){
@@ -361,14 +379,20 @@ async function handleFiles(zone,fileList){
     }catch(e){console.error(e);rec.state='err';rec.ok=false;}
     renderFiles(zone);buildMapping();
   }
+  maybeRun();
+}
+function maybeRun(){
+  if(sidePages('inv').length&&sidePages('pak').length){
+    buildMapping();
+    const first=document.getElementById('results-step').classList.contains('hidden');
+    showOv('Armando el cuadro…');
+    setTimeout(()=>{compare(first);hideOv();},40);
+  }
 }
 
 /* ---------- mapping UI ---------- */
 function buildMapping(){
-  const hi=sidePages('inv').length>0,hp=sidePages('pak').length>0;
-  document.getElementById('map-step').classList.toggle('hidden',!(hi||hp));
   buildMapCard('inv','Facturas / Invoices');buildMapCard('pak','Packing Lists');
-  document.getElementById('run').disabled=!(hi&&hp);
 }
 function buildMapCard(side,title){
   const rep=sideRep(side),card=document.getElementById('mapcard-'+side);
@@ -417,7 +441,7 @@ function priceGroups(P){ // -> [{price,qty,importe}] sorted; only valid-price gr
   return Object.values(P.prices||{}).map(pg=>({price:pg.price,qty:pg.qty,count:pg.count,importe:isNaN(pg.price)?NaN:pg.qty*pg.price}))
     .sort((a,b)=>(isNaN(a.price)?1:a.price)-(isNaN(b.price)?1:b.price));
 }
-function compare(){
+function compare(scroll){
   const ai=aggregate('inv'),ap=aggregate('pak');const codes=new Set([...Object.keys(ai),...Object.keys(ap)]);results=[];
   codes.forEach(code=>{
     const I=ai[code]||{qty:0,count:0,desc:'',orig:code,prices:{}};const P=ap[code]||{qty:0,count:0,desc:'',orig:code,prices:{}};
@@ -433,8 +457,26 @@ function compare(){
     else priceDisplay='varios';
     results.push({code:I.orig||P.orig||code,desc:I.desc||P.desc||'',ci:I.count,cp:P.count,qi:I.qty,qp:P.qty,dif:P.qty-I.qty,status:st,rep:(I.count>1||P.count>1),priceRows:pg,importe:valid.length?importe:NaN,priceDisplay,multiPrice,hasNoPrice});
   });
+  reconcileFuzzy();
   results.sort((a,b)=>a.code.localeCompare(b.code,undefined,{numeric:true}));
-  renderResults();document.getElementById('results-step').classList.remove('hidden');document.getElementById('results-step').scrollIntoView();
+  renderResults();document.getElementById('results-step').classList.remove('hidden');if(scroll)document.getElementById('results-step').scrollIntoView();
+}
+function reconcileFuzzy(){
+  const ne=results.filter(r=>r.status==='no_embarcado');   // en factura, no en packing
+  const nf=results.filter(r=>r.status==='no_facturado');   // en packing, no en factura
+  ne.forEach(a=>{
+    if(a._merged)return;
+    const cands=nf.filter(b=>!b._merged&&fuzzyMatch(a.code,b.code));
+    if(cands.length!==1)return;
+    const b=cands[0];
+    const back=ne.filter(x=>!x._merged&&fuzzyMatch(x.code,b.code));
+    if(back.length!==1)return;            // emparejar solo si es 1 a 1
+    a.cp=b.cp;a.qp=b.qp;a.dif=a.qp-a.qi;
+    a.status=Math.abs(a.qi-a.qp)<1e-6?'igual':'diferente';
+    a.fuzzy=[normCode(a.code),normCode(b.code)];a.rep=a.rep||b.rep;
+    b._merged=true;
+  });
+  results=results.filter(r=>!r._merged);
 }
 const STATUS={igual:['Igual','b-ig'],diferente:['Diferente','b-di'],no_embarcado:['No embarcado','b-ne'],no_facturado:['No facturado','b-nf']};
 function renderRecon(){
@@ -474,7 +516,7 @@ function renderResults(){
   if(!rows.length){body.innerHTML='<tr><td colspan="10" class="empty">Sin resultados para este filtro.</td></tr>';return;}
   rows.forEach(r=>{const st=STATUS[r.status];const tr=document.createElement('tr');if(r.rep)tr.className='rep';
     const pdisp=r.priceDisplay==='varios'?'<span class="pchip">varios</span>':(isNaN(r.priceDisplay)?'—':fmtN(r.priceDisplay));
-    tr.innerHTML=`<td class="code">${r.code}${r.rep?'<span class="tag-rep">×'+Math.max(r.ci,r.cp)+'</span>':''}</td><td>${r.desc||'—'}</td><td class="num">${r.ci||'—'}</td><td class="num">${r.cp||'—'}</td><td class="num">${r.ci?fmtN(r.qi):'—'}</td><td class="num">${r.cp?fmtN(r.qp):'—'}</td><td class="num" style="${Math.abs(r.dif)>1e-6?'color:var(--red);font-weight:700':''}">${fmtN(r.dif)}</td><td><span class="badge ${st[1]}">${st[0]}</span></td><td class="num">${pdisp}</td><td class="num">${isNaN(r.importe)?'—':fmtN(r.importe)}</td>`;
+    tr.innerHTML=`<td class="code">${r.code}${r.rep?'<span class="tag-rep">×'+Math.max(r.ci,r.cp)+'</span>':''}${r.fuzzy?'<span class="pchip" style="color:#7a5cc0;border-color:#c9b8ec" title="Emparejado pese a diferencia de OCR: '+r.fuzzy[0]+' ↔ '+r.fuzzy[1]+'">≈OCR</span>':''}</td><td>${r.desc||'—'}</td><td class="num">${r.ci||'—'}</td><td class="num">${r.cp||'—'}</td><td class="num">${r.ci?fmtN(r.qi):'—'}</td><td class="num">${r.cp?fmtN(r.qp):'—'}</td><td class="num" style="${Math.abs(r.dif)>1e-6?'color:var(--red);font-weight:700':''}">${fmtN(r.dif)}</td><td><span class="badge ${st[1]}">${st[0]}</span></td><td class="num">${pdisp}</td><td class="num">${isNaN(r.importe)?'—':fmtN(r.importe)}</td>`;
     body.appendChild(tr);
     if(r.multiPrice||r.hasNoPrice){
       r.priceRows.forEach(p=>{const sub=document.createElement('tr');sub.className='sub';
@@ -516,9 +558,8 @@ document.addEventListener('click',e=>{
   if(e.target.classList.contains('rm')){store[e.target.dataset.side].splice(+e.target.dataset.i,1);renderFiles(e.target.dataset.side);buildMapping();}
   if(e.target.classList.contains('chip')){document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));e.target.classList.add('on');activeFilter=e.target.dataset.f;renderResults();}
 });
-document.addEventListener('change',e=>{const d=e.target.dataset;if(!d||!d.k)return;map[d.side][d.k]=+e.target.value;});
+document.addEventListener('change',e=>{const d=e.target.dataset;if(!d||!d.k)return;map[d.side][d.k]=+e.target.value;if(sidePages('inv').length&&sidePages('pak').length){showOv('Recalculando…');setTimeout(()=>{compare(false);hideOv();},40);}});
 document.getElementById('search').addEventListener('input',renderResults);
-document.getElementById('run').onclick=()=>{if(map.inv.code<0||map.inv.qty<0||map.pak.code<0||map.pak.qty<0){alert('No pude identificar el código o la cantidad en algún lado. Revisa el paso 2.');return;}showOv('Comparando…');setTimeout(()=>{compare();hideOv();},60);};
 window.addEventListener('beforeunload',()=>{if(ocrWorker)ocrWorker.terminate();});
 
 </script>
