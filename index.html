@@ -476,21 +476,34 @@ function gridMapping(side,g){
   return{m:autoMap(g,hi),hi};
 }
 function aggregateGrid(agg,g,m,hi){
-  if(m.code<0||m.qty<0)return;
-  const ncol=(g[hi]||[]).length,minfill=Math.max(4,Math.floor(ncol*0.5));
+  if(m.code<0)return;
   let start=hi+1;
   if(hi<g.length&&m.code<(g[hi]||[]).length&&isCodeTok(g[hi][m.code]))start=hi; // la "fila header" ya es data
   for(let i=start;i<g.length;i++){
     const r=g[i];if(!r)continue;
-    if(m.code>=r.length||!isCodeTok(r[m.code]))continue;   // exige código válido en su columna (excluye líneas EORI, etc.)
-    const code=normCode(r[m.code]);if(!code)continue;
-    let qty=(m.qty<r.length)?parseNum(r[m.qty]):NaN;
-    if(isNaN(qty)){ // fila partida por OCR: tomar primer entero 1-4 díg en columnas tras el código
-      for(let ci=m.code+1;ci<r.length&&isNaN(qty);ci++){const mm=String(r[ci]).match(/\b\d{1,4}\b/);if(mm)qty=parseFloat(mm[0]);}
+    const fill=r.filter(c=>String(c).trim()!=='').length;
+    const hasDecimal=r.some(c=>/\d[.,]\d{2}\b/.test(String(c)));
+    const looksData=fill>=4&&hasDecimal;   // una fila real de tabla tiene varias celdas y algún precio/peso
+    // --- CÓDIGO: celda mapeada; si falla, primer token tipo-código (solo en filas que parecen de tabla) ---
+    let codeRaw='';
+    if(m.code<r.length&&isCodeTok(r[m.code])&&looksData)codeRaw=r[m.code];
+    else if(looksData){for(let ci=0;ci<r.length&&!codeRaw;ci++){for(const t of String(r[ci]).split(/\s+/)){if(isCodeTok(t)){codeRaw=t;break;}}}}
+    if(!codeRaw)continue;
+    const code=normCode(codeRaw);if(!code)continue;
+    // --- CANTIDAD: celda mapeada, si no el primer entero 1-4 díg de la fila (excluye código/PO largos) ---
+    let qty=NaN;
+    if(m.qty>=0&&m.qty<r.length){const cell=String(r[m.qty]);const mm=cell.match(/^\s*(\d{1,4})\s*$/)||cell.match(/\b(\d{1,4})\b/);if(mm)qty=parseFloat(mm[1]);}
+    if(isNaN(qty)){
+      for(let ci=0;ci<r.length&&isNaN(qty);ci++){
+        if(String(r[ci])===String(codeRaw))continue;
+        for(const t of String(r[ci]).split(/\s+/)){if(/^\d{1,4}$/.test(t)){qty=parseFloat(t);break;}}
+      }
     }
     if(isNaN(qty))continue;
-    let price=NaN;if(m.price>=0&&m.price<r.length){const p=parseNum(r[m.price]);if(!isNaN(p))price=p;}
-    if(!agg[code])agg[code]={qty:0,count:0,desc:'',orig:String(r[m.code]).trim(),prices:{}};
+    // --- PRECIO: celda mapeada si es decimal; si no, busca un decimal en la fila ---
+    let price=NaN;
+    if(m.price>=0&&m.price<r.length){const p=parseNum(r[m.price]);if(!isNaN(p)&&/[.,]\d/.test(String(r[m.price])))price=p;}
+    if(!agg[code])agg[code]={qty:0,count:0,desc:'',orig:String(codeRaw).trim(),prices:{}};
     agg[code].qty+=qty;agg[code].count++;
     if(m.desc>=0&&m.desc<r.length&&!agg[code].desc)agg[code].desc=String(r[m.desc]||'').trim();
     const key=isNaN(price)?'NA':price.toFixed(2);
