@@ -108,6 +108,20 @@ table.res tr:hover{background:var(--paper2)}
 .empty{text-align:center;padding:60px 20px;color:var(--ink2)}
 .note{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;padding:14px 18px;font-size:13px;color:var(--ink2);margin-top:18px}
 .note b{color:var(--ink)}
+.recon{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:18px;border-left:5px solid var(--green)}
+.recon.bad{border-left-color:var(--red)}
+.recon h4{font-family:'Archivo';font-weight:800;text-transform:uppercase;font-size:14px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.recon .verdict{font-family:'IBM Plex Sans';font-size:13.5px;margin-bottom:12px}
+.recon .verdict.ok{color:var(--green);font-weight:600}
+.recon .verdict.bad{color:var(--red-d);font-weight:600}
+.recon-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.recon-grid .ri{background:var(--paper2);border:1px solid var(--line);border-radius:7px;padding:9px 12px}
+.recon-grid .ri .rl{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink2);font-weight:600}
+.recon-grid .ri .rv{font-family:'JetBrains Mono';font-weight:700;font-size:17px;margin-top:2px}
+.recon-grid .ri.t .rv{color:var(--ink)} .recon-grid .ri.g .rv{color:var(--green)} .recon-grid .ri.d .rv{color:var(--red)} .recon-grid .ri.n .rv{color:var(--amber)}
+tr.sub td{background:#faf7ef;font-size:11.5px;color:var(--ink2);border-bottom:1px dotted var(--line)}
+tr.sub td.code{font-weight:500;padding-left:22px}
+.pchip{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;color:var(--amber);border:1px solid #e0c587;border-radius:3px;padding:1px 5px;margin-left:6px}
 .hidden{display:none}
 footer{margin:60px 0 40px;text-align:center;color:var(--ink2);font-size:12.5px}
 footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono'}
@@ -165,6 +179,7 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
   <section class="step hidden" id="results-step">
     <div class="step-h"><div class="step-n">3</div><h2>Resultado del cotejo</h2></div>
     <div class="cards" id="cards"></div>
+    <div id="recon"></div>
     <div class="toolbar">
       <span class="chip on" data-f="all">Todos</span>
       <span class="chip" data-f="igual">Iguales</span>
@@ -188,7 +203,7 @@ footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-fami
       </table>
     </div>
     <div class="note">
-      <b>Cómo se decide el estado:</b> <b>Igual</b> = la suma de cantidades en factura y packing coincide; <b>Diferente</b> = ambos lo tienen pero la cantidad no cuadra; <b>No embarcado</b> = está en la factura pero no en el packing; <b>No facturado</b> = está en el packing pero no en la factura. Filas moradas = códigos repetidos (se sumaron). Si leíste un PDF escaneado por OCR, revisa los códigos: el OCR puede confundir O/0 o I/1 en algún caso.
+      <b>Cómo se agrupa y se decide:</b> los códigos se agrupan por <b>código + precio</b>: si un código se repite <b>al mismo precio</b> se suman las cantidades; si aparece con <b>precio distinto</b>, cada precio se muestra en su propia sub-línea (↳) para no mezclar. <b>Igual</b> = la cantidad total de factura y packing coincide; <b>Diferente</b> = ambos lo tienen pero la cantidad no cuadra; <b>No embarcado</b> = en la factura pero no en el packing; <b>No facturado</b> = en el packing pero no en la factura. El panel de <b>Cuadre</b> suma el importe por estado para verificar el monto facturado y te señala dónde están las diferencias. Si leíste un PDF escaneado por OCR, revisa los códigos (puede confundir O/0 o I/1).
     </div>
   </section>
   <footer>
@@ -374,7 +389,7 @@ function renderPreview(side){
   document.getElementById('prev-'+side).innerHTML='<table>'+g.slice(0,9).map((r,ri)=>'<tr class="'+(ri==rep.hi?'hdr':'')+'">'+r.map(c=>`<td>${String(c).slice(0,18)}</td>`).join('')+'</tr>').join('')+'</table>';
 }
 
-/* ---------- comparison ---------- */
+/* ---------- comparison (group by code + price) ---------- */
 function gridMapping(side,g){
   const rep=sideRep(side);const repCols=(rep.grid[rep.hi]||[]).length;const hi=detectHeader(g),cols=(g[hi]||[]).length;
   if(cols===repCols)return{m:map[side],hi};
@@ -388,24 +403,62 @@ function aggregateGrid(agg,g,m,hi){
     if(r.filter(c=>String(c).trim()!=='').length<minfill)continue;
     if(!isCodeTok(r[m.code]))continue;
     const code=normCode(r[m.code]),qty=parseNum(r[m.qty]);if(!code||isNaN(qty))continue;
-    if(!agg[code])agg[code]={qty:0,count:0,desc:'',price:NaN,orig:String(r[m.code]).trim()};
+    let price=NaN;if(m.price>=0&&m.price<r.length){const p=parseNum(r[m.price]);if(!isNaN(p))price=p;}
+    if(!agg[code])agg[code]={qty:0,count:0,desc:'',orig:String(r[m.code]).trim(),prices:{}};
     agg[code].qty+=qty;agg[code].count++;
     if(m.desc>=0&&m.desc<r.length&&!agg[code].desc)agg[code].desc=String(r[m.desc]||'').trim();
-    if(m.price>=0&&m.price<r.length&&isNaN(agg[code].price)){const p=parseNum(r[m.price]);if(!isNaN(p))agg[code].price=p;}
+    const key=isNaN(price)?'NA':price.toFixed(2);
+    if(!agg[code].prices[key])agg[code].prices[key]={price,qty:0,count:0};
+    agg[code].prices[key].qty+=qty;agg[code].prices[key].count++;
   }
 }
 function aggregate(side){const agg={};sidePages(side).forEach(g=>{const{m,hi}=gridMapping(side,g);aggregateGrid(agg,g,m,hi);});return agg;}
+function priceGroups(P){ // -> [{price,qty,importe}] sorted; only valid-price groups carry importe
+  return Object.values(P.prices||{}).map(pg=>({price:pg.price,qty:pg.qty,count:pg.count,importe:isNaN(pg.price)?NaN:pg.qty*pg.price}))
+    .sort((a,b)=>(isNaN(a.price)?1:a.price)-(isNaN(b.price)?1:b.price));
+}
 function compare(){
   const ai=aggregate('inv'),ap=aggregate('pak');const codes=new Set([...Object.keys(ai),...Object.keys(ap)]);results=[];
   codes.forEach(code=>{
-    const I=ai[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};const P=ap[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
+    const I=ai[code]||{qty:0,count:0,desc:'',orig:code,prices:{}};const P=ap[code]||{qty:0,count:0,desc:'',orig:code,prices:{}};
     let st;if(I.count>0&&P.count>0)st=Math.abs(I.qty-P.qty)<1e-6?'igual':'diferente';else if(I.count>0)st='no_embarcado';else st='no_facturado';
-    results.push({code:I.orig||P.orig||code,desc:I.desc||P.desc||'',ci:I.count,cp:P.count,qi:I.qty,qp:P.qty,dif:P.qty-I.qty,status:st,rep:(I.count>1||P.count>1),price:!isNaN(I.price)?I.price:P.price,amount:isNaN(I.price)?NaN:I.qty*I.price});
+    const pg=priceGroups(I);
+    const valid=pg.filter(p=>!isNaN(p.price));
+    const importe=valid.reduce((a,p)=>a+p.importe,0);
+    const hasNoPrice=pg.some(p=>isNaN(p.price)&&p.qty>0);
+    const multiPrice=valid.length>1;
+    let priceDisplay;
+    if(valid.length===0)priceDisplay=NaN;
+    else if(valid.length===1&&!hasNoPrice)priceDisplay=valid[0].price;
+    else priceDisplay='varios';
+    results.push({code:I.orig||P.orig||code,desc:I.desc||P.desc||'',ci:I.count,cp:P.count,qi:I.qty,qp:P.qty,dif:P.qty-I.qty,status:st,rep:(I.count>1||P.count>1),priceRows:pg,importe:valid.length?importe:NaN,priceDisplay,multiPrice,hasNoPrice});
   });
   results.sort((a,b)=>a.code.localeCompare(b.code,undefined,{numeric:true}));
   renderResults();document.getElementById('results-step').classList.remove('hidden');document.getElementById('results-step').scrollIntoView();
 }
 const STATUS={igual:['Igual','b-ig'],diferente:['Diferente','b-di'],no_embarcado:['No embarcado','b-ne'],no_facturado:['No facturado','b-nf']};
+function renderRecon(){
+  const sum=f=>results.filter(f).reduce((a,r)=>a+(isNaN(r.importe)?0:r.importe),0);
+  const impIg=sum(r=>r.status==='igual'),impDi=sum(r=>r.status==='diferente'),impNe=sum(r=>r.status==='no_embarcado');
+  const totalFact=impIg+impDi+impNe;
+  const nDi=results.filter(r=>r.status==='diferente').length,nNe=results.filter(r=>r.status==='no_embarcado').length,nNf=results.filter(r=>r.status==='no_facturado').length;
+  const ok=(nDi+nNe+nNf)===0;
+  const el=document.getElementById('recon');
+  let verdict;
+  if(ok)verdict=`<div class="verdict ok">✔ Todo cuadra: las cantidades de factura y packing coinciden en todos los códigos. Monto facturado: USD ${fmtN(totalFact)}.</div>`;
+  else{
+    const parts=[];if(nDi)parts.push(`${nDi} con cantidad distinta`);if(nNe)parts.push(`${nNe} facturado(s) sin embarcar`);if(nNf)parts.push(`${nNf} embarcado(s) sin facturar`);
+    verdict=`<div class="verdict bad">⚠ Hay diferencias: ${parts.join(' · ')}. Revisa abajo las filas en rojo (Diferente), ámbar (No embarcado) y azul (No facturado) — usa los filtros para ubicarlas.</div>`;
+  }
+  el.className='recon'+(ok?'':' bad');
+  el.innerHTML=`<h4>${ok?'✔':'⚠'} Cuadre de montos</h4>${verdict}
+    <div class="recon-grid">
+      <div class="ri t"><div class="rl">Total facturado</div><div class="rv">${fmtN(totalFact)}</div></div>
+      <div class="ri g"><div class="rl">En códigos iguales</div><div class="rv">${fmtN(impIg)}</div></div>
+      <div class="ri d"><div class="rl">En diferentes</div><div class="rv">${fmtN(impDi)}</div></div>
+      <div class="ri n"><div class="rl">En no embarcado</div><div class="rv">${fmtN(impNe)}</div></div>
+    </div>`;
+}
 function renderResults(){
   const c={igual:0,diferente:0,no_embarcado:0,no_facturado:0,rep:0};results.forEach(r=>{c[r.status]++;if(r.rep)c.rep++;});
   document.getElementById('cards').innerHTML=`
@@ -415,17 +468,37 @@ function renderResults(){
     <div class="card ne"><div class="v">${c.no_embarcado}</div><div class="l">No embarcado</div></div>
     <div class="card nf"><div class="v">${c.no_facturado}</div><div class="l">No facturado</div></div>
     <div class="card rp"><div class="v">${c.rep}</div><div class="l">Repetidos</div></div>`;
+  renderRecon();
   const q=(document.getElementById('search').value||'').toUpperCase();const body=document.getElementById('res-body');body.innerHTML='';
   const rows=results.filter(r=>{if(activeFilter==='rep'&&!r.rep)return false;if(activeFilter!=='all'&&activeFilter!=='rep'&&r.status!==activeFilter)return false;if(q&&!(r.code.toUpperCase().includes(q)||String(r.desc).toUpperCase().includes(q)))return false;return true;});
   if(!rows.length){body.innerHTML='<tr><td colspan="10" class="empty">Sin resultados para este filtro.</td></tr>';return;}
   rows.forEach(r=>{const st=STATUS[r.status];const tr=document.createElement('tr');if(r.rep)tr.className='rep';
-    tr.innerHTML=`<td class="code">${r.code}${r.rep?'<span class="tag-rep">×'+Math.max(r.ci,r.cp)+'</span>':''}</td><td>${r.desc||'—'}</td><td class="num">${r.ci||'—'}</td><td class="num">${r.cp||'—'}</td><td class="num">${r.ci?fmtN(r.qi):'—'}</td><td class="num">${r.cp?fmtN(r.qp):'—'}</td><td class="num" style="${Math.abs(r.dif)>1e-6?'color:var(--red);font-weight:700':''}">${fmtN(r.dif)}</td><td><span class="badge ${st[1]}">${st[0]}</span></td><td class="num">${isNaN(r.price)?'—':fmtN(r.price)}</td><td class="num">${isNaN(r.amount)?'—':fmtN(r.amount)}</td>`;
-    body.appendChild(tr);});
+    const pdisp=r.priceDisplay==='varios'?'<span class="pchip">varios</span>':(isNaN(r.priceDisplay)?'—':fmtN(r.priceDisplay));
+    tr.innerHTML=`<td class="code">${r.code}${r.rep?'<span class="tag-rep">×'+Math.max(r.ci,r.cp)+'</span>':''}</td><td>${r.desc||'—'}</td><td class="num">${r.ci||'—'}</td><td class="num">${r.cp||'—'}</td><td class="num">${r.ci?fmtN(r.qi):'—'}</td><td class="num">${r.cp?fmtN(r.qp):'—'}</td><td class="num" style="${Math.abs(r.dif)>1e-6?'color:var(--red);font-weight:700':''}">${fmtN(r.dif)}</td><td><span class="badge ${st[1]}">${st[0]}</span></td><td class="num">${pdisp}</td><td class="num">${isNaN(r.importe)?'—':fmtN(r.importe)}</td>`;
+    body.appendChild(tr);
+    if(r.multiPrice||r.hasNoPrice){
+      r.priceRows.forEach(p=>{const sub=document.createElement('tr');sub.className='sub';
+        sub.innerHTML=`<td class="code">↳ a precio</td><td></td><td></td><td></td><td class="num">${fmtN(p.qty)}</td><td></td><td></td><td></td><td class="num">${isNaN(p.price)?'sin precio':fmtN(p.price)}</td><td class="num">${isNaN(p.importe)?'—':fmtN(p.importe)}</td>`;
+        body.appendChild(sub);});
+    }
+  });
 }
 
 /* ---------- export ---------- */
-const exportData=()=>results.map(r=>({Codigo:r.code,Descripcion:r.desc,'Veces Factura':r.ci,'Veces Packing':r.cp,'Cant. Factura':r.ci?r.qi:'','Cant. Packing':r.cp?r.qp:'',Diferencia:r.dif,Estado:STATUS[r.status][0],Repetido:r.rep?'Si':'No','Precio Unit.':isNaN(r.price)?'':r.price,'Importe Factura':isNaN(r.amount)?'':r.amount}));
-document.getElementById('exp-xlsx').onclick=()=>{const ws=XLSX.utils.json_to_sheet(exportData());const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Cotejo');XLSX.writeFile(wb,'cotejo_factura_vs_packing.xlsx');};
+const detallePrecios=r=>r.priceRows.map(p=>`${isNaN(p.price)?'s/precio':fmtN(p.price)}×${fmtN(p.qty)}`).join(' | ');
+const exportData=()=>results.map(r=>({Codigo:r.code,Descripcion:r.desc,'Veces Factura':r.ci,'Veces Packing':r.cp,'Cant. Factura':r.ci?r.qi:'','Cant. Packing':r.cp?r.qp:'',Diferencia:r.dif,Estado:STATUS[r.status][0],'Precios distintos':r.multiPrice?'Si':'No','Detalle precios':detallePrecios(r),'Importe Factura':isNaN(r.importe)?'':r.importe}));
+function reconData(){
+  const sum=f=>results.filter(f).reduce((a,r)=>a+(isNaN(r.importe)?0:r.importe),0);
+  const cnt=s=>results.filter(r=>r.status===s).length;
+  return [
+    {Concepto:'Códigos iguales',Cantidad:cnt('igual'),'Importe (USD)':sum(r=>r.status==='igual')},
+    {Concepto:'Códigos diferentes',Cantidad:cnt('diferente'),'Importe (USD)':sum(r=>r.status==='diferente')},
+    {Concepto:'No embarcado (facturado sin packing)',Cantidad:cnt('no_embarcado'),'Importe (USD)':sum(r=>r.status==='no_embarcado')},
+    {Concepto:'No facturado (packing sin factura)',Cantidad:cnt('no_facturado'),'Importe (USD)':''},
+    {Concepto:'TOTAL FACTURADO',Cantidad:'','Importe (USD)':sum(r=>r.status!=='no_facturado')},
+  ];
+}
+document.getElementById('exp-xlsx').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(exportData()),'Cotejo');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(reconData()),'Cuadre');XLSX.writeFile(wb,'cotejo_factura_vs_packing.xlsx');};
 document.getElementById('exp-csv').onclick=()=>{const csv=XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(exportData()));const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.download='cotejo_factura_vs_packing.csv';a.click();};
 document.getElementById('exp-prt').onclick=()=>window.print();
 
