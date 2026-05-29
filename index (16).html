@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cotejo · Facturas vs Packing List</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800;900&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --paper:#f4f0e6; --paper2:#ece6d6; --ink:#1a1714; --ink2:#4a443c;
+  --line:#d6cdb8; --red:#c4402a; --red-d:#9c2f1d; --green:#2f7d4f; --green-bg:#dceade;
+  --amber:#b9791a; --amber-bg:#f5e6c8; --blue:#3a5a8c; --blue-bg:#dde6f2;
+  --grey-bg:#e3ddcf;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:'IBM Plex Sans',sans-serif;background:var(--paper);color:var(--ink);
+  line-height:1.5;
+  background-image:radial-gradient(var(--line) 0.5px,transparent 0.5px);
+  background-size:22px 22px;
+}
+.mono{font-family:'JetBrains Mono',monospace}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+/* header */
+header{border-bottom:3px solid var(--ink);background:var(--paper);position:relative;overflow:hidden}
+header::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(45deg,transparent,transparent 18px,rgba(196,64,42,.05) 18px,rgba(196,64,42,.05) 20px);pointer-events:none}
+.head-inner{padding:34px 24px 26px;position:relative}
+.kicker{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.25em;text-transform:uppercase;color:var(--red);font-weight:700}
+h1{font-family:'Archivo',sans-serif;font-weight:900;font-size:clamp(34px,6vw,62px);line-height:.92;letter-spacing:-.02em;margin:6px 0 10px;text-transform:uppercase}
+h1 .x{color:var(--red)}
+.sub{max-width:680px;color:var(--ink2);font-size:15px}
+.stamp{position:absolute;top:26px;right:24px;border:3px solid var(--red);color:var(--red);
+  font-family:'Archivo';font-weight:800;text-transform:uppercase;font-size:13px;letter-spacing:.12em;
+  padding:8px 14px;transform:rotate(-7deg);opacity:.85;border-radius:4px;text-align:center;line-height:1.2}
+@media(max-width:640px){.stamp{display:none}}
+
+/* steps */
+.step{margin-top:40px}
+.step-h{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+.step-n{font-family:'Archivo';font-weight:900;font-size:20px;background:var(--ink);color:var(--paper);
+  width:38px;height:38px;display:grid;place-items:center;border-radius:50%}
+.step-h h2{font-family:'Archivo';font-weight:800;font-size:24px;text-transform:uppercase;letter-spacing:-.01em}
+
+/* drop zones */
+.drops{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:760px){.drops{grid-template-columns:1fr}}
+.dz{background:var(--paper);border:2px dashed var(--line);border-radius:10px;padding:22px;transition:.15s;position:relative}
+.dz.inv{border-color:var(--blue)}
+.dz.pak{border-color:var(--amber)}
+.dz.over{background:var(--paper2);transform:translateY(-2px)}
+.dz-label{font-family:'Archivo';font-weight:800;text-transform:uppercase;letter-spacing:.04em;font-size:17px;display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.dot{width:11px;height:11px;border-radius:50%}
+.dot.b{background:var(--blue)} .dot.a{background:var(--amber)}
+.dz small{color:var(--ink2);font-size:12.5px}
+.dz-btn{margin-top:14px;display:inline-block;background:var(--ink);color:var(--paper);font-family:'Archivo';
+  font-weight:700;text-transform:uppercase;font-size:13px;letter-spacing:.05em;padding:9px 16px;border-radius:6px;cursor:pointer}
+.dz-btn:hover{background:var(--red)}
+.files{list-style:none;margin-top:14px;display:flex;flex-direction:column;gap:7px}
+.files li{display:flex;align-items:center;gap:8px;background:var(--paper2);border:1px solid var(--line);
+  border-radius:6px;padding:7px 10px;font-size:13px}
+.files .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.files .ftag{font-family:'JetBrains Mono';font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;background:var(--ink);color:var(--paper)}
+.files .ftag.err{background:var(--red)}
+.files .rm{cursor:pointer;color:var(--red);font-weight:700;border:none;background:none;font-size:16px;line-height:1}
+
+/* mapping */
+.map-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:760px){.map-grid{grid-template-columns:1fr}}
+.map-card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:18px;border-top:4px solid var(--ink)}
+.map-card.inv{border-top-color:var(--blue)} .map-card.pak{border-top-color:var(--amber)}
+.map-card h3{font-family:'Archivo';font-weight:800;text-transform:uppercase;font-size:16px;margin-bottom:12px}
+.field{margin-bottom:11px}
+.field label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--ink2);display:block;margin-bottom:4px}
+.field label .req{color:var(--red)}
+select{width:100%;font-family:'IBM Plex Sans';font-size:13.5px;padding:8px 10px;border:1.5px solid var(--line);
+  border-radius:6px;background:var(--paper2);color:var(--ink);cursor:pointer}
+select:focus{outline:none;border-color:var(--ink)}
+.preview{margin-top:8px;overflow:auto;max-height:170px;border:1px solid var(--line);border-radius:6px}
+.preview table{border-collapse:collapse;font-size:11px;font-family:'JetBrains Mono';white-space:nowrap}
+.preview th,.preview td{border:1px solid var(--line);padding:3px 7px;text-align:left}
+.preview th{background:var(--ink);color:var(--paper);position:sticky;top:0}
+.preview tr.hdr td{background:var(--amber-bg);font-weight:700}
+
+/* run button */
+.run{margin-top:26px;text-align:center}
+.run button{font-family:'Archivo';font-weight:900;text-transform:uppercase;letter-spacing:.05em;font-size:18px;
+  background:var(--red);color:#fff;border:none;padding:16px 44px;border-radius:8px;cursor:pointer;
+  box-shadow:0 4px 0 var(--red-d);transition:.1s}
+.run button:hover{transform:translateY(2px);box-shadow:0 2px 0 var(--red-d)}
+.run button:disabled{background:#b3aa93;box-shadow:0 4px 0 #948b75;cursor:not-allowed;transform:none}
+
+/* summary cards */
+.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:22px}
+@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:520px){.cards{grid-template-columns:repeat(2,1fr)}}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:14px;border-left:5px solid var(--ink)}
+.card .v{font-family:'Archivo';font-weight:900;font-size:30px;line-height:1}
+.card .l{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink2);margin-top:4px;font-weight:600}
+.card.ig{border-left-color:var(--green)} .card.ig .v{color:var(--green)}
+.card.di{border-left-color:var(--red)} .card.di .v{color:var(--red)}
+.card.ne{border-left-color:var(--amber)} .card.ne .v{color:var(--amber)}
+.card.nf{border-left-color:var(--blue)} .card.nf .v{color:var(--blue)}
+.card.rp{border-left-color:#7a5cc0} .card.rp .v{color:#7a5cc0}
+
+/* toolbar */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.chip{font-family:'JetBrains Mono';font-size:12px;font-weight:700;border:1.5px solid var(--ink);background:var(--paper);
+  padding:6px 12px;border-radius:20px;cursor:pointer;text-transform:uppercase}
+.chip.on{background:var(--ink);color:var(--paper)}
+.toolbar .spacer{flex:1}
+.toolbar input{font-family:'JetBrains Mono';font-size:13px;padding:7px 11px;border:1.5px solid var(--line);border-radius:6px;background:var(--paper);min-width:150px}
+.exp{font-family:'Archivo';font-weight:700;text-transform:uppercase;font-size:12px;letter-spacing:.04em;
+  background:var(--green);color:#fff;border:none;padding:8px 14px;border-radius:6px;cursor:pointer}
+.exp.csv{background:var(--ink)} .exp.prt{background:var(--blue)}
+.exp:hover{filter:brightness(1.1)}
+
+/* results table */
+.tbl-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+table.res{border-collapse:collapse;width:100%;font-size:13px;min-width:840px}
+table.res th{background:var(--ink);color:var(--paper);font-family:'Archivo';font-weight:700;text-transform:uppercase;
+  font-size:11px;letter-spacing:.03em;padding:11px 10px;text-align:left;position:sticky;top:0;white-space:nowrap}
+table.res td{padding:9px 10px;border-bottom:1px solid var(--line)}
+table.res td.num{text-align:right;font-family:'JetBrains Mono'}
+table.res td.code{font-family:'JetBrains Mono';font-weight:700}
+table.res tr.rep{background:#f1ebfa}
+table.res tr:hover{background:var(--paper2)}
+.badge{font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:4px;text-transform:uppercase;white-space:nowrap}
+.b-ig{background:var(--green-bg);color:var(--green)}
+.b-di{background:#f6dcd6;color:var(--red-d)}
+.b-ne{background:var(--amber-bg);color:var(--amber)}
+.b-nf{background:var(--blue-bg);color:var(--blue)}
+.tag-rep{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;color:#7a5cc0;border:1px solid #c9b8ec;border-radius:3px;padding:1px 5px;margin-left:6px}
+
+.empty{text-align:center;padding:60px 20px;color:var(--ink2)}
+.note{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;padding:14px 18px;font-size:13px;color:var(--ink2);margin-top:18px}
+.note b{color:var(--ink)}
+.hidden{display:none}
+footer{margin:60px 0 40px;text-align:center;color:var(--ink2);font-size:12.5px}
+footer code{background:var(--paper2);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono'}
+
+#overlay{position:fixed;inset:0;background:rgba(26,23,20,.78);display:none;place-items:center;z-index:99}
+#overlay.on{display:grid}
+.spin{width:46px;height:46px;border:5px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#overlay p{color:#fff;font-family:'JetBrains Mono';margin-top:16px;font-size:13px}
+
+@media print{
+  body{background:#fff}
+  header,.step:not(#results-step),.toolbar,#overlay,footer,.note{display:none!important}
+  #results-step{margin:0}
+  .tbl-wrap{border:none}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-inner wrap">
+    <div class="kicker">Cotejo de Embarque · Comercio Exterior</div>
+    <h1>Factura <span class="x">/</span> Packing</h1>
+    <p class="sub">Sube tus facturas (invoices) y packing lists en PDF, Excel o CSV. La herramienta agrupa por código, suma las cantidades repetidas y te dice si coinciden, difieren, o si algo no se embarcó o no se facturó.</p>
+    <div class="stamp">Verificado<br>✕ Sin firmar</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- STEP 1 -->
+  <section class="step">
+    <div class="step-h"><div class="step-n">1</div><h2>Cargar documentos</h2></div>
+    <div class="drops">
+      <div class="dz inv" id="dz-inv">
+        <div class="dz-label"><span class="dot b"></span>Facturas / Invoices</div>
+        <small>PDF · XLSX · XLS · CSV — puedes soltar varios archivos</small>
+        <div><label class="dz-btn">Elegir archivos<input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style="display:none" id="in-inv"></label></div>
+        <ul class="files" id="files-inv"></ul>
+      </div>
+      <div class="dz pak" id="dz-pak">
+        <div class="dz-label"><span class="dot a"></span>Packing Lists</div>
+        <small>PDF · XLSX · XLS · CSV — puedes soltar varios archivos</small>
+        <div><label class="dz-btn">Elegir archivos<input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style="display:none" id="in-pak"></label></div>
+        <ul class="files" id="files-pak"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="step hidden" id="map-step">
+    <div class="step-h"><div class="step-n">2</div><h2>Asignar columnas</h2></div>
+    <p class="sub" style="margin-bottom:16px">Indica qué columna es el <b>código</b>, la <b>cantidad</b>, etc. en cada documento. Se detectan automáticamente, pero puedes ajustarlas. La asignación se aplica a todos los archivos del mismo lado.</p>
+    <div class="map-grid">
+      <div class="map-card inv" id="mapcard-inv"></div>
+      <div class="map-card pak" id="mapcard-pak"></div>
+    </div>
+    <div class="run"><button id="run" disabled>Comparar ▸</button></div>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="step hidden" id="results-step">
+    <div class="step-h"><div class="step-n">3</div><h2>Resultado del cotejo</h2></div>
+    <div class="cards" id="cards"></div>
+    <div class="toolbar">
+      <span class="chip on" data-f="all">Todos</span>
+      <span class="chip" data-f="igual">Iguales</span>
+      <span class="chip" data-f="diferente">Diferentes</span>
+      <span class="chip" data-f="no_embarcado">No embarcado</span>
+      <span class="chip" data-f="no_facturado">No facturado</span>
+      <span class="chip" data-f="rep">Repetidos</span>
+      <input type="text" id="search" placeholder="Buscar código…">
+      <span class="spacer"></span>
+      <button class="exp" id="exp-xlsx">⤓ Excel</button>
+      <button class="exp csv" id="exp-csv">⤓ CSV</button>
+      <button class="exp prt" id="exp-prt">⎙ PDF</button>
+    </div>
+    <div class="tbl-wrap">
+      <table class="res">
+        <thead><tr>
+          <th>Código</th><th>Descripción</th>
+          <th>Veces Fact.</th><th>Veces Pack.</th>
+          <th>Cant. Factura</th><th>Cant. Packing</th><th>Dif.</th>
+          <th>Estado</th><th>Precio</th><th>Importe</th>
+        </tr></thead>
+        <tbody id="res-body"></tbody>
+      </table>
+    </div>
+    <div class="note">
+      <b>Cómo se decide el estado:</b> un código está <b>Igual</b> si la suma de cantidades en factura y packing coincide; <b>Diferente</b> si ambos lo tienen pero la cantidad no cuadra; <b>No embarcado</b> si está en la factura pero no en el packing; <b>No facturado</b> si está en el packing pero no en la factura. Las filas moradas son <b>códigos repetidos</b> (aparecen más de una vez y se sumaron). El packing list normalmente no trae precio, así que el importe se toma de las facturas.
+    </div>
+  </section>
+
+  <footer>
+    Herramienta 100% local — tus archivos se procesan en tu navegador, nada se sube a ningún servidor.<br>
+    Para publicarla: sube este <code>index.html</code> a un repositorio y actívalo en <code>Settings → Pages</code>.
+  </footer>
+</div>
+
+<div id="overlay"><div style="text-align:center"><div class="spin" style="margin:0 auto"></div><p id="ov-txt">Leyendo documentos…</p></div></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const store={inv:[],pak:[]};      // each: {name, rows:[[...]], headerIdx, ok}
+const map={inv:{},pak:{}};        // {code,qty,desc,price} -> column index
+let results=[], activeFilter='all';
+
+/* ---------- helpers ---------- */
+function ext(n){return n.split('.').pop().toLowerCase();}
+function parseNum(v){
+  if(typeof v==='number') return v;
+  if(v==null) return NaN;
+  let s=String(v).trim().replace(/[^\d.,\-]/g,'');
+  if(s==='') return NaN;
+  const lc=s.lastIndexOf(','), ld=s.lastIndexOf('.');
+  if(lc>ld) s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(/,/g,'');
+  const n=parseFloat(s); return isNaN(n)?NaN:n;
+}
+function normCode(v){return String(v==null?'':v).trim().toUpperCase().replace(/\s+/g,'');}
+function fmtN(n){return (Math.round(n*100)/100).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});}
+
+/* find the most likely header row (most non-empty cells in first 20 rows) */
+function detectHeader(rows){
+  let best=0,bestC=-1;
+  for(let i=0;i<Math.min(rows.length,20);i++){
+    const c=rows[i].filter(x=>String(x).trim()!=='').length;
+    const hasText=rows[i].some(x=>/[a-zA-Z]/.test(String(x)));
+    if(c>bestC && hasText){bestC=c;best=i;}
+  }
+  return best;
+}
+function autoMap(header){
+  const m={code:-1,qty:-1,desc:-1,price:-1};
+  header.forEach((h,i)=>{
+    const t=String(h).toLowerCase();
+    if(m.qty<0 && /(cant|qty|quantity|q'?ty)/.test(t)) m.qty=i;
+    if(m.desc<0 && /(desc)/.test(t)) m.desc=i;
+    if(m.price<0 && /(price|precio|unit)/.test(t)) m.price=i;
+  });
+  // code: prefer fm/part/código/"no."; avoid "cust item"
+  header.forEach((h,i)=>{
+    const t=String(h).toLowerCase();
+    if(m.code<0 && /(fm.?part|part\s*no|fmc|c[oó]digo)/.test(t)) m.code=i;
+  });
+  if(m.code<0) header.forEach((h,i)=>{const t=String(h).toLowerCase().trim();if(m.code<0 && (t==='no.'||t==='no'||/^fm/.test(t)))m.code=i;});
+  if(m.code<0) header.forEach((h,i)=>{const t=String(h).toLowerCase();if(m.code<0 && /item/.test(t)&&!/cust/.test(t))m.code=i;});
+  return m;
+}
+
+/* ---------- parsing ---------- */
+async function parseFile(file){
+  const e=ext(file.name);
+  if(e==='pdf') return parsePDF(file);
+  return parseSheet(file);
+}
+async function parseSheet(file){
+  const buf=await file.arrayBuffer();
+  const wb=XLSX.read(buf,{type:'array'});
+  let best=null,bestN=-1;
+  wb.SheetNames.forEach(sn=>{
+    const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false,defval:''});
+    if(a.length>bestN){bestN=a.length;best=a;}
+  });
+  return (best||[]).map(r=>r.map(c=>c==null?'':c));
+}
+async function parsePDF(file){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  let allRows=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    let items=tc.items.filter(it=>it.str.trim()!=='')
+      .map(it=>({s:it.str,x:it.transform[4],y:Math.round(it.transform[5])}));
+    if(!items.length) continue;
+    // group into visual rows by y
+    items.sort((a,b)=> b.y-a.y || a.x-b.x);
+    const rows=[]; let cur=[],refY=null;
+    for(const it of items){
+      if(refY===null||Math.abs(it.y-refY)<=3){cur.push(it);if(refY===null)refY=it.y;}
+      else{rows.push(cur);cur=[it];refY=it.y;}
+    }
+    if(cur.length)rows.push(cur);
+    // cluster x positions into columns
+    const xs=[]; rows.forEach(r=>r.forEach(it=>xs.push(it.x)));
+    xs.sort((a,b)=>a-b);
+    const cuts=[]; let prev=null;
+    xs.forEach(x=>{if(prev===null||x-prev>22){cuts.push(x);}prev=x;});
+    const colOf=x=>{let bi=0,bd=1e9;cuts.forEach((c,i)=>{const d=Math.abs(x-c);if(d<bd){bd=d;bi=i;}});return bi;};
+    rows.forEach(r=>{
+      const row=new Array(cuts.length).fill('');
+      r.sort((a,b)=>a.x-b.x).forEach(it=>{const ci=colOf(it.x);row[ci]=(row[ci]?row[ci]+' ':'')+it.s.trim();});
+      allRows.push(row);
+    });
+  }
+  // pad to equal width
+  const w=allRows.reduce((m,r)=>Math.max(m,r.length),0);
+  return allRows.map(r=>{while(r.length<w)r.push('');return r;});
+}
+
+/* ---------- UI: files ---------- */
+function renderFiles(side){
+  const ul=document.getElementById('files-'+side); ul.innerHTML='';
+  store[side].forEach((f,i)=>{
+    const li=document.createElement('li');
+    li.innerHTML=`<span class="ftag ${f.ok?'':'err'}">${ext(f.name)}</span>
+      <span class="fn" title="${f.name}">${f.name}</span>
+      <span style="font-size:11px;color:var(--ink2)">${f.ok?f.rows.length+' filas':'sin tabla'}</span>
+      <button class="rm" data-side="${side}" data-i="${i}">✕</button>`;
+    ul.appendChild(li);
+  });
+}
+async function handleFiles(side,fileList){
+  showOv('Leyendo documentos…');
+  for(const file of fileList){
+    try{
+      const rows=await parseFile(file);
+      const ok=rows && rows.length>0;
+      store[side].push({name:file.name,rows:ok?rows:[],ok,headerIdx:ok?detectHeader(rows):0});
+    }catch(err){console.error(err);store[side].push({name:file.name,rows:[],ok:false,headerIdx:0});}
+  }
+  hideOv();
+  renderFiles(side);
+  buildMapping();
+}
+
+/* ---------- UI: mapping ---------- */
+function firstOk(side){return store[side].find(f=>f.ok);}
+function buildMapping(){
+  const hasInv=store.inv.some(f=>f.ok), hasPak=store.pak.some(f=>f.ok);
+  if(!hasInv && !hasPak){document.getElementById('map-step').classList.add('hidden');return;}
+  document.getElementById('map-step').classList.remove('hidden');
+  buildMapCard('inv','Facturas / Invoices');
+  buildMapCard('pak','Packing Lists');
+  document.getElementById('run').disabled=!(hasInv && hasPak);
+}
+function buildMapCard(side,title){
+  const f=firstOk(side); const card=document.getElementById('mapcard-'+side);
+  if(!f){card.innerHTML=`<h3>${title}</h3><p style="color:var(--ink2);font-size:13px">Aún no hay archivos válidos.</p>`;return;}
+  const header=f.rows[f.headerIdx]||[];
+  const auto=autoMap(header); map[side]={...auto};
+  const opts=(sel)=>header.map((h,i)=>`<option value="${i}" ${sel==i?'selected':''}>Col ${i+1}: ${String(h).slice(0,28)||'—'}</option>`).join('');
+  const optsOpt=(sel)=>`<option value="-1" ${sel<0?'selected':''}>— (ninguna) —</option>`+opts(sel);
+  card.innerHTML=`<h3>${title}</h3>
+    <div class="field"><label>Fila de encabezado</label>
+      <select data-side="${side}" data-k="header">${f.rows.slice(0,20).map((r,i)=>`<option value="${i}" ${i==f.headerIdx?'selected':''}>Fila ${i+1}: ${r.filter(x=>String(x).trim()).slice(0,3).join(' | ').slice(0,40)}</option>`).join('')}</select></div>
+    <div class="field"><label>Código <span class="req">*</span></label><select data-side="${side}" data-k="code">${opts(auto.code)}</select></div>
+    <div class="field"><label>Cantidad <span class="req">*</span></label><select data-side="${side}" data-k="qty">${opts(auto.qty)}</select></div>
+    <div class="field"><label>Descripción</label><select data-side="${side}" data-k="desc">${optsOpt(auto.desc)}</select></div>
+    <div class="field"><label>Precio unitario</label><select data-side="${side}" data-k="price">${optsOpt(auto.price)}</select></div>
+    <div class="preview" id="prev-${side}"></div>`;
+  renderPreview(side);
+}
+function renderPreview(side){
+  const f=firstOk(side); if(!f)return;
+  const box=document.getElementById('prev-'+side);
+  const rows=f.rows.slice(0,8);
+  box.innerHTML='<table>'+rows.map((r,ri)=>'<tr class="'+(ri==f.headerIdx?'hdr':'')+'">'+r.map(c=>`<td>${String(c).slice(0,18)}</td>`).join('')+'</tr>').join('')+'</table>';
+}
+
+/* ---------- comparison ---------- */
+function aggregate(side){
+  const agg={}; // code -> {qty,count,desc,price,orig}
+  store[side].forEach(f=>{
+    if(!f.ok)return;
+    const m=map[side]; const start=f.headerIdx+1;
+    for(let i=start;i<f.rows.length;i++){
+      const row=f.rows[i]; if(!row)continue;
+      const rawCode=row[m.code]; const code=normCode(rawCode);
+      const qty=parseNum(row[m.qty]);
+      if(!code || isNaN(qty)) continue;            // skip non-data rows
+      if(!/[0-9A-Z]/.test(code)) continue;
+      if(!agg[code]) agg[code]={qty:0,count:0,desc:'',price:NaN,orig:String(rawCode).trim()};
+      agg[code].qty+=qty; agg[code].count++;
+      if(m.desc>=0 && !agg[code].desc) agg[code].desc=String(row[m.desc]||'').trim();
+      if(m.price>=0 && isNaN(agg[code].price)){const p=parseNum(row[m.price]);if(!isNaN(p))agg[code].price=p;}
+    }
+  });
+  return agg;
+}
+function compare(){
+  const ai=aggregate('inv'), ap=aggregate('pak');
+  const codes=new Set([...Object.keys(ai),...Object.keys(ap)]);
+  results=[];
+  codes.forEach(code=>{
+    const I=ai[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
+    const P=ap[code]||{qty:0,count:0,desc:'',price:NaN,orig:code};
+    let status;
+    if(I.count>0 && P.count>0) status=(Math.abs(I.qty-P.qty)<1e-6)?'igual':'diferente';
+    else if(I.count>0) status='no_embarcado';
+    else status='no_facturado';
+    const price=!isNaN(I.price)?I.price:(!isNaN(P.price)?P.price:NaN);
+    results.push({
+      code:I.orig||P.orig||code, desc:I.desc||P.desc||'',
+      ci:I.count, cp:P.count, qi:I.qty, qp:P.qty, dif:P.qty-I.qty,
+      status, rep:(I.count>1||P.count>1),
+      price, amount:isNaN(I.price)?NaN:I.qty*I.price
+    });
+  });
+  results.sort((a,b)=>a.code.localeCompare(b.code,undefined,{numeric:true}));
+  renderResults();
+  document.getElementById('results-step').classList.remove('hidden');
+  document.getElementById('results-step').scrollIntoView();
+}
+const STATUS={igual:['Igual','b-ig'],diferente:['Diferente','b-di'],no_embarcado:['No embarcado','b-ne'],no_facturado:['No facturado','b-nf']};
+function renderResults(){
+  const c={igual:0,diferente:0,no_embarcado:0,no_facturado:0,rep:0};
+  results.forEach(r=>{c[r.status]++;if(r.rep)c.rep++;});
+  document.getElementById('cards').innerHTML=`
+    <div class="card"><div class="v">${results.length}</div><div class="l">Códigos</div></div>
+    <div class="card ig"><div class="v">${c.igual}</div><div class="l">Iguales</div></div>
+    <div class="card di"><div class="v">${c.diferente}</div><div class="l">Diferentes</div></div>
+    <div class="card ne"><div class="v">${c.no_embarcado}</div><div class="l">No embarcado</div></div>
+    <div class="card nf"><div class="v">${c.no_facturado}</div><div class="l">No facturado</div></div>
+    <div class="card rp"><div class="v">${c.rep}</div><div class="l">Repetidos</div></div>`;
+  const q=(document.getElementById('search').value||'').toUpperCase();
+  const body=document.getElementById('res-body'); body.innerHTML='';
+  const rows=results.filter(r=>{
+    if(activeFilter==='rep' && !r.rep)return false;
+    if(activeFilter!=='all' && activeFilter!=='rep' && r.status!==activeFilter)return false;
+    if(q && !(r.code.toUpperCase().includes(q)||String(r.desc).toUpperCase().includes(q)))return false;
+    return true;
+  });
+  if(!rows.length){body.innerHTML='<tr><td colspan="10" class="empty">Sin resultados para este filtro.</td></tr>';return;}
+  rows.forEach(r=>{
+    const [lbl,cls]=STATUS[r.status];
+    const tr=document.createElement('tr'); if(r.rep)tr.className='rep';
+    tr.innerHTML=`
+      <td class="code">${r.code}${r.rep?'<span class="tag-rep">×'+Math.max(r.ci,r.cp)+'</span>':''}</td>
+      <td>${r.desc||'—'}</td>
+      <td class="num">${r.ci||'—'}</td>
+      <td class="num">${r.cp||'—'}</td>
+      <td class="num">${r.ci?fmtN(r.qi):'—'}</td>
+      <td class="num">${r.cp?fmtN(r.qp):'—'}</td>
+      <td class="num" style="${Math.abs(r.dif)>1e-6?'color:var(--red);font-weight:700':''}">${fmtN(r.dif)}</td>
+      <td><span class="badge ${cls}">${lbl}</span></td>
+      <td class="num">${isNaN(r.price)?'—':fmtN(r.price)}</td>
+      <td class="num">${isNaN(r.amount)?'—':fmtN(r.amount)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+/* ---------- export ---------- */
+function exportData(){
+  return results.map(r=>({
+    'Codigo':r.code,'Descripcion':r.desc,'Veces Factura':r.ci,'Veces Packing':r.cp,
+    'Cant. Factura':r.ci?r.qi:'','Cant. Packing':r.cp?r.qp:'','Diferencia':r.dif,
+    'Estado':STATUS[r.status][0],'Repetido':r.rep?'Si':'No',
+    'Precio Unit.':isNaN(r.price)?'':r.price,'Importe Factura':isNaN(r.amount)?'':r.amount
+  }));
+}
+document.getElementById('exp-xlsx').onclick=()=>{
+  const ws=XLSX.utils.json_to_sheet(exportData());
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Cotejo');
+  XLSX.writeFile(wb,'cotejo_factura_vs_packing.xlsx');
+};
+document.getElementById('exp-csv').onclick=()=>{
+  const ws=XLSX.utils.json_to_sheet(exportData());
+  const csv=XLSX.utils.sheet_to_csv(ws);
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='cotejo_factura_vs_packing.csv';a.click();
+};
+document.getElementById('exp-prt').onclick=()=>window.print();
+
+/* ---------- events ---------- */
+function showOv(t){document.getElementById('ov-txt').textContent=t;document.getElementById('overlay').classList.add('on');}
+function hideOv(){document.getElementById('overlay').classList.remove('on');}
+['inv','pak'].forEach(side=>{
+  const inp=document.getElementById('in-'+side), dz=document.getElementById('dz-'+side);
+  inp.onchange=e=>handleFiles(side,e.target.files);
+  ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('over');}));
+  ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('over');}));
+  dz.addEventListener('drop',e=>handleFiles(side,e.dataTransfer.files));
+});
+document.addEventListener('click',e=>{
+  if(e.target.classList.contains('rm')){
+    store[e.target.dataset.side].splice(+e.target.dataset.i,1);
+    renderFiles(e.target.dataset.side); buildMapping();
+  }
+  if(e.target.classList.contains('chip')){
+    document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+    e.target.classList.add('on'); activeFilter=e.target.dataset.f; renderResults();
+  }
+});
+document.addEventListener('change',e=>{
+  if(e.target.dataset && e.target.dataset.k){
+    const side=e.target.dataset.side, k=e.target.dataset.k, v=+e.target.value;
+    if(k==='header'){firstOk(side).headerIdx=v;buildMapCard(side,side==='inv'?'Facturas / Invoices':'Packing Lists');}
+    else map[side][k]=v;
+  }
+});
+document.getElementById('search').addEventListener('input',renderResults);
+document.getElementById('run').onclick=()=>{
+  const mi=map.inv, mp=map.pak;
+  if(mi.code<0||mi.qty<0||mp.code<0||mp.qty<0){alert('Asigna al menos el Código y la Cantidad en ambos lados.');return;}
+  showOv('Comparando…'); setTimeout(()=>{compare();hideOv();},60);
+};
+</script>
+</body>
+</html>
