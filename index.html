@@ -241,16 +241,27 @@ function classifyText(txt){
 }
 
 /* ---------- token -> rows (per page) ---------- */
-function computeBounds(tokens){
-  const hs=tokens.map(t=>t.h).filter(h=>h>0).sort((a,b)=>a-b);
-  const mh=hs.length?hs[Math.floor(hs.length/2)]:10,tol=Math.max(mh*0.6,3);
-  const sorted=tokens.slice().sort((a,b)=>a.y-b.y||a.x-b.x);
+const isJunkTok=t=>{const s=String(t.t).trim();return s===''||/^[|_\-–—.·:]+$/.test(s);};
+const groupLines=(tokens,tol)=>{
+  const toks=tokens.filter(t=>!isJunkTok(t));
+  toks.forEach(t=>t.yc=t.y+(t.h||8)/2);
+  toks.sort((a,b)=>a.yc-b.yc||a.x-b.x);
   const lines=[];let cur=[],ref=null;
-  for(const t of sorted){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
+  for(const t of toks){
+    if(ref===null||Math.abs(t.yc-ref)<=tol){cur.push(t);ref=ref===null?t.yc:(ref*(cur.length-1)+t.yc)/cur.length;}
+    else{lines.push(cur);cur=[t];ref=t.yc;}
+  }
   if(cur.length)lines.push(cur);
+  return lines;
+};
+function computeBounds(tokens){
+  const real=tokens.filter(t=>!isJunkTok(t));
+  const hs=real.map(t=>t.h).filter(h=>h>0).sort((a,b)=>a-b);
+  const mh=hs.length?hs[Math.floor(hs.length/2)]:10,tol=Math.max(mh*0.7,12);
+  const lines=groupLines(real,tol);
   let dl=lines.filter(l=>l.length>=3&&l.some(t=>isCodeTok(t.t)));
   if(dl.length<2)dl=lines.filter(l=>l.length>=3);if(dl.length<1)dl=lines;
-  const minX=Math.min(...tokens.map(t=>t.x)),maxX=Math.max(...tokens.map(t=>t.x+t.w)),W=Math.ceil(maxX-minX)+2;
+  const minX=Math.min(...real.map(t=>t.x)),maxX=Math.max(...real.map(t=>t.x+t.w)),W=Math.ceil(maxX-minX)+2;
   const cov=new Float32Array(W);
   dl.forEach(l=>l.forEach(t=>{const a=Math.floor(t.x-minX),b=Math.ceil(t.x+t.w-minX);for(let x=a;x<b&&x<W;x++)if(x>=0)cov[x]++;}));
   const thr=Math.max(1,dl.length*0.10),gmin=Math.max(mh*0.5,4),bounds=[];let s=null;
@@ -259,10 +270,7 @@ function computeBounds(tokens){
 }
 function rowsFromTokens(tokens,bounds,tol){
   if(!tokens.length)return[];
-  const sorted=tokens.slice().sort((a,b)=>a.y-b.y||a.x-b.x);
-  const lines=[];let cur=[],ref=null;
-  for(const t of sorted){if(ref===null||Math.abs(t.y-ref)<=tol){cur.push(t);if(ref===null)ref=t.y;}else{lines.push(cur);cur=[t];ref=t.y;}}
-  if(cur.length)lines.push(cur);
+  const lines=groupLines(tokens,tol);
   const colOf=xc=>{let c=0;for(const b of bounds)if(xc>=b)c++;return c;};
   const ncol=bounds.length+1;
   return lines.map(l=>{const row=new Array(ncol).fill('');l.sort((a,b)=>a.x-b.x).forEach(t=>{const ci=colOf(t.x+t.w/2);row[ci]=(row[ci]?row[ci]+' ':'')+String(t.t).trim();});return row;});
@@ -420,13 +428,19 @@ function gridMapping(side,g){
   return{m:autoMap(g,hi),hi};
 }
 function aggregateGrid(agg,g,m,hi){
+  if(m.code<0||m.qty<0)return;
   const ncol=(g[hi]||[]).length,minfill=Math.max(4,Math.floor(ncol*0.5));
-  for(let i=hi+1;i<g.length;i++){
+  let start=hi+1;
+  if(hi<g.length&&m.code<(g[hi]||[]).length&&isCodeTok(g[hi][m.code]))start=hi; // la "fila header" ya es data
+  for(let i=start;i<g.length;i++){
     const r=g[i];if(!r)continue;
-    if(m.code<0||m.qty<0||m.code>=r.length||m.qty>=r.length)continue;
-    if(r.filter(c=>String(c).trim()!=='').length<minfill)continue;
-    if(!isCodeTok(r[m.code]))continue;
-    const code=normCode(r[m.code]),qty=parseNum(r[m.qty]);if(!code||isNaN(qty))continue;
+    if(m.code>=r.length||!isCodeTok(r[m.code]))continue;   // exige código válido en su columna (excluye líneas EORI, etc.)
+    const code=normCode(r[m.code]);if(!code)continue;
+    let qty=(m.qty<r.length)?parseNum(r[m.qty]):NaN;
+    if(isNaN(qty)){ // fila partida por OCR: tomar primer entero 1-4 díg en columnas tras el código
+      for(let ci=m.code+1;ci<r.length&&isNaN(qty);ci++){const mm=String(r[ci]).match(/\b\d{1,4}\b/);if(mm)qty=parseFloat(mm[0]);}
+    }
+    if(isNaN(qty))continue;
     let price=NaN;if(m.price>=0&&m.price<r.length){const p=parseNum(r[m.price]);if(!isNaN(p))price=p;}
     if(!agg[code])agg[code]={qty:0,count:0,desc:'',orig:String(r[m.code]).trim(),prices:{}};
     agg[code].qty+=qty;agg[code].count++;
